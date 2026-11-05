@@ -135,6 +135,19 @@ function renderSwitchStatus() {
   pill.title = mode === 'REAL-SWITCH'
     ? 'Live Switch server (core 0.31.0) — rooms are real Mattermost channels via the Switch bridge.'
     : 'Simulated stub — not a live Switch connection. No real Mattermost room yet.';
+  const drawerLabel = $('#drawer-sim-label');
+  if (drawerLabel) {
+    drawerLabel.textContent = mode === 'REAL-SWITCH'
+      ? 'LIVE — real Switch room (Mattermost channel via the Switch bridge). Messages here are real.'
+      : 'SIMULATED — stub server, not Switch. Messages here are demo transcript only.';
+    drawerLabel.classList.toggle('live-label', mode === 'REAL-SWITCH');
+  }
+  const footerNote = $('#footer-switch-note');
+  if (footerNote) {
+    footerNote.textContent = mode === 'REAL-SWITCH'
+      ? 'Switch integration is LIVE — real switch-core 0.31.0 + Mattermost via the Switch bridge (see docs/switch-live-integration.md).'
+      : 'Switch integration is a labelled simulation until a real Switch server (Console 0.40.1 / core 0.31.0) is connected.';
+  }
 }
 
 // ---------- shell ----------

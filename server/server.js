@@ -220,6 +220,7 @@ const server = createServer(async (req, res) => {
 });
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('server.js')) {
-  server.listen(PORT, () => console.log(`CONVERGE on http://localhost:${PORT} — Switch mode: ${SWITCH_MODE}`));
+  // SECURITY: loopback only — the app, like the Switch stack, is local-only.
+  server.listen(PORT, '127.0.0.1', () => console.log(`CONVERGE on http://localhost:${PORT} — Switch mode: ${SWITCH_MODE}`));
 }
 export { server };

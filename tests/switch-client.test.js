@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   getOps, callOp, registerAgent, probeHealth, agentProfile,
-  OPERATION_CATALOG, SWITCH_VERSION,
+  openEventStream, OPERATION_CATALOG, SWITCH_VERSION,
 } from '../server/switch-client.js';
 
 const calls = [];
@@ -76,6 +76,31 @@ test('probeHealth calls public GET /health', async () => {
   assert.equal(calls[0].url, 'http://localhost:8000/health');
   assert.equal(out.ok, true);
   assert.equal(out.status, 200);
+});
+
+test('openEventStream beats POST /agents/{id}/connection/beat on an interval', async () => {
+  const seen = [];
+  globalThis.fetch = async (url, init = {}) => {
+    seen.push({ url: String(url), init });
+    if (String(url).includes('/events')) {
+      return {
+        ok: true, status: 200,
+        body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('event: connection_state\ndata: {"ok":true}\n\n')); } }),
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => '{}', body: null };
+  };
+  const stream = await openEventStream('http://localhost:8000', 'agent-1', 'key-123', 'conn-7', () => {}, { beatIntervalMs: 50 });
+  await new Promise((r) => setTimeout(r, 220));
+  const beats = seen.filter((c) => c.url.includes('/connection/beat'));
+  assert.ok(beats.length >= 2, `expected >= 2 beats, saw ${beats.length}`);
+  assert.equal(beats[0].init.method, 'POST');
+  assert.equal(JSON.parse(beats[0].init.body).connection_id, 'conn-7');
+  assert.equal(beats[0].init.headers.Authorization, 'Bearer key-123');
+  stream.close();
+  const countAtClose = seen.filter((c) => c.url.includes('/connection/beat')).length;
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(seen.filter((c) => c.url.includes('/connection/beat')).length, countAtClose, 'beats must stop after close()');
 });
 
 test('operation catalogue matches the live registry (53 ops)', () => {

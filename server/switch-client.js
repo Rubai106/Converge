@@ -1,12 +1,16 @@
 // CONVERGE Switch client — speaks the VERIFIED live protocol (switch-core 0.31.0).
 // Verified live 2026-11-05/06 against a real switch-core 0.31.0 server
 // (see docs/switch-live-integration.md):
-//  - Transport: WebSocket events + HTTP ops. The live event stream is SSE:
-//    GET /agents/{id}/events?connection_id=<uuid> with Accept: text/event-stream.
-//    The connection_id is client-generated (a UUID); ops then carry it as
-//    X-Switch-Connection-Id. Node's global WebSocket takes no headers
-//    argument, so this client uses the SSE stream, which accepts the Bearer
-//    token as a normal Authorization header.
+//  - Transport: the live connection is the WebSocket at
+//    /agents/{id}/connection/ws. This client uses the SSE compatibility path
+//    (kept for pre-revision-7 runtimes): GET /agents/{id}/events?connection_id
+//    =<uuid> with Accept: text/event-stream. The connection_id is
+//    client-generated (a UUID); ops then carry it as X-Switch-Connection-Id.
+//    An SSE client MUST tick POST /agents/{id}/connection/beat every 2s
+//    (TTL 6s) or the server evicts it with `heartbeat_lapsed` — verified
+//    live 2026-11-06. Room messages are NOT pushed on the stream (it carries
+//    connection/subscription events); the agent reads human messages from the
+//    room timeline via the read_context op.
 //  - Auth: Authorization: Bearer <agent api_key> on the stream and every op.
 //    Registration key is separate and is rejected everywhere else.
 //  - Probe: GET /health (public, no auth) -> {"status":"ok"}.
@@ -84,13 +88,26 @@ export async function callOp(baseUrl, apiKey, agentId, opName, args = {}, connec
 // Open the live SSE event stream for one connection id. Returns a handle
 // with close(); events arrive via onEvent as raw SSE lines. The stream is
 // long-lived; callers close it when their room work is done.
-export async function openEventStream(baseUrl, agentId, apiKey, connectionId, onEvent) {
+export async function openEventStream(baseUrl, agentId, apiKey, connectionId, onEvent, { beatIntervalMs = 2000 } = {}) {
   const controller = new AbortController();
   const res = await fetch(
     `${base(baseUrl)}/agents/${agentId}/events?connection_id=${connectionId}`,
     { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'text/event-stream' }, signal: controller.signal },
   );
   if (!res.ok || !res.body) throw new Error(`GET /agents/${agentId}/events failed: ${res.status}`);
+  // The SSE stream is the pre-WebSocket compatibility path: the client must
+  // tick POST /agents/{id}/connection/beat every 2s (TTL 6s) or the server
+  // evicts the connection with `heartbeat_lapsed` (verified live 2026-11-06:
+  // an unbeaten stream was evicted; a beaten one stayed alive). The beat
+  // stops when the stream is closed.
+  const beatTimer = setInterval(() => {
+    fetch(`${base(baseUrl)}/agents/${agentId}/connection/beat`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ connection_id: connectionId }),
+      signal: controller.signal,
+    }).catch(() => { /* a failed beat is retried on the next tick; close() aborts in-flight beats */ });
+  }, beatIntervalMs);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -106,7 +123,7 @@ export async function openEventStream(baseUrl, agentId, apiKey, connectionId, on
       }
     } catch { /* aborted */ }
   })();
-  return { connectionId, close: () => controller.abort() };
+  return { connectionId, close: () => { clearInterval(beatTimer); controller.abort(); } };
 }
 
 // Run one room-bound op (e.g. post_message) the way a live agent does it:

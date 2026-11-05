@@ -71,14 +71,38 @@ is under `~/workspace/switch-server/`:
 4. Re-extract rootfs dirs if missing (the `docker save` + untar steps).
 5. `sudo apt-get install -y postgresql-16 nginx`, start postgres, recreate
    DBs/roles from `.env` (see `docs/switch-deployment.md` for the SQL).
-6. Start in order: `./run-switch-core.sh`, `./run-mattermost.sh`,
-   `nginx -c nginx/gateway.conf`, `./run-setup.sh` (idempotent),
-   then the CONVERGE app with the real Switch env (see below).
+6. Start in order — **Mattermost BEFORE switch-core**: `./run-mattermost.sh`,
+   wait for `GET /api/v4/system/ping` → `{"status":"OK"}`,
+   then `./run-switch-core.sh`, `nginx -c nginx/gateway.conf`,
+   `./run-setup.sh` (idempotent), then the CONVERGE app with the real
+   Switch env (see below). The order matters: the Mattermost bridge logs
+   into Mattermost at startup, and if Mattermost is not up yet the bridge
+   **crashes and does not recover** — observed 2026-11-06: after a
+   switch-core-first restart the bridge was down, human messages posted
+   to Mattermost were never ingested into Switch, and they were NOT
+   backfilled after the bridge was restarted. Restarting switch-core once
+   Mattermost was up restored ingestion (verified with a fresh marker
+   message appearing in `read_context`).
 7. The agent id/key in `.converge-agent.json` and the bridge id survive
    in ~/workspace, so re-registration is not needed; the rooms survive in
    Postgres only if its data dir survives (it does not — `/var/lib/postgresql`
    is outside ~/workspace, so a replacement means re-running setup and
    re-creating rooms; the evidence in this repo stays valid as a record).
+
+## Security — loopback only (verified 2026-11-06)
+This VM has no public interface (only `lo` and a CGNAT `host0`
+198.19.0.2/30 behind the sandbox NAT), but the services were still bound
+to 0.0.0.0 at first — switch-core's log even said "Switch is running on
+http://0.0.0.0:8000". They are now bound to loopback only, verified with
+`ss -tlnp`:
+- switch-core: `SERVER_HOST=127.0.0.1` in `run-switch-core.sh`
+  (pydantic setting `server_host`, default `0.0.0.0`).
+- Mattermost: `MM_SERVICESETTINGS_LISTENADDRESS=127.0.0.1:8065`.
+- Gateway: `listen 127.0.0.1:3000;` in `nginx/gateway.conf`.
+- CONVERGE app: `server.listen(PORT, '127.0.0.1', …)`.
+- Postgres already listened on 127.0.0.1:5432 only.
+Nothing here is reachable from another machine. The Switch API and its
+registration endpoints are never public.
 
 ## CONVERGE app — real Switch env
 ```
@@ -90,14 +114,30 @@ SWITCH_BRIDGE_ID=bcdd5c54-fa46-4af2-a5a5-ccc097138ae0
 ```
 With these set, `/api/status` reports REAL-SWITCH with the live health
 probe, and `/api/switch/*` talks to the real server (per-agent ops,
-SSE event stream, room creation on first post).
+SSE event stream with heartbeat, room creation on first post).
 
 ## Verified protocol corrections (live server vs docs)
 - Ops are per-agent: `GET /agents/{id}/ops`, `POST /agents/{id}/ops/{op}`.
   The body is the arguments object itself.
-- The event stream is SSE: `GET /agents/{id}/events?connection_id=<uuid>`
-  with `Accept: text/event-stream`; the connection id is client-generated.
+- The live connection is the WebSocket at `/agents/{id}/connection/ws`.
+  This client uses the SSE compatibility path (kept for pre-revision-7
+  runtimes): `GET /agents/{id}/events?connection_id=<uuid>` with
+  `Accept: text/event-stream`; the connection id is client-generated.
+  An SSE client MUST tick `POST /agents/{id}/connection/beat` every 2s
+  (TTL 6s) or the server evicts it with `heartbeat_lapsed` — verified
+  live: an unbeaten stream was evicted after ~6s; a beaten stream stayed
+  alive 20s+. The app's `openEventStream` now beats automatically
+  (tests/switch-client.test.js covers it).
 - `post_message` needs `connect_to_room` first, on the same connection id
   (header `X-Switch-Connection-Id`).
 - `GET /health` is public → `{"status":"ok"}`; `/healthz` needs auth (401).
 - Registration: `POST /agents` with `Authorization: Bearer <registration key>`.
+- **How the agent receives human messages:** NOT via the event stream —
+  the stream carries connection/subscription events only, and the
+  long-poll buffer holds room_join events, not messages. Human messages
+  posted in Mattermost are ingested by the bridge into Switch's room
+  timeline; the agent reads them with the `read_context` op (verified
+  2026-11-06: the owner's HAGGLE approval is in the HAG-014 timeline;
+  a fresh marker message posted after the bridge restart appeared in
+  `read_context` within 10s). Messages posted while the bridge was down
+  are never backfilled — they stay in Mattermost only.

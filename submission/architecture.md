@@ -11,7 +11,7 @@ Browser (temporary dev UI)
 server/server.js  (node:http, static + API)
   ├─ server/engine.js   — deterministic maths, state machine, COURT tally, CORRECTION extraction
   ├─ server/store.js    — JSON store, seeded demo cases
-  ├─ server/switch-client.js — documented Switch protocol client (WebSocket + HTTP ops)
+  ├─ server/switch-client.js — Switch client (SSE events + per-agent HTTP ops, verified live)
   └─ server/stub-switch.js   — SIMULATED stub implementing the same routes
         │
         │ (real deployment: SWITCH_BASE_URL + SWITCH_API_KEY)
@@ -47,12 +47,25 @@ Agents communicate by message/mention in the room. There is no separate task
 protocol (per Switch docs).
 
 ## Switch integration
-Protocol: WebSocket events (`/agents/{id}/events`) + HTTP ops (`GET /ops`,
-`POST /ops/{name}`), `Authorization: Bearer` agent key, registration
-`POST /agents` → `{id, api_key}` once, probe `GET /health`.
-Per-operation payloads are read from a live server's `GET /ops`, never hard-coded.
-Mattermost: bundled via Console / `collab` Compose profile; per-agent bot accounts;
-adding an agent bot to a channel creates the room; `!`-form commands only.
+Protocol: live connection is the WebSocket (`/agents/{id}/connection/ws`);
+this client uses the SSE compatibility path
+(`GET /agents/{id}/events?connection_id=<uuid>`,
+`Accept: text/event-stream`) with a `POST /agents/{id}/connection/beat`
+tick every 2s (TTL 6s). Per-agent HTTP ops (`GET /agents/{id}/ops`,
+`POST /agents/{id}/ops/{name}`, arguments object as the body),
+`Authorization: Bearer` agent key, registration `POST /agents` →
+`{id, api_key}` once, probe `GET /health`. `post_message` needs
+`connect_to_room` first on the same connection id
+(`X-Switch-Connection-Id`). Room messages are NOT pushed on the stream —
+the agent reads human messages from the room timeline via `read_context`.
+Per-operation payloads are read from a live server's
+`GET /agents/{id}/ops`, never hard-coded. This is the OBSERVED live
+behaviour (2026-11-06); the earlier global-`GET /ops` reading is
+superseded — see `docs/switch-live-integration.md`.
+Mattermost: bundled via the `collab` Compose profile (official path) or the
+native run on this machine (same software, same versions — see
+`docs/switch-live-integration.md`); per-agent bot accounts; adding an agent
+bot to a channel creates the room.
 See `docs/switch-protocol-notes.md` for the verified details and the
 unverified items (switch-core image name, per-op JSON shapes, WS URL scheme).
 

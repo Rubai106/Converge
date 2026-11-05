@@ -1,10 +1,10 @@
 # CONVERGE — PROGRESS.md
 
 ## Current stage (2026-11-06, ~00:00 Dhaka)
-REAL-SWITCH LIVE: switch-core 0.31.0 + Mattermost 11.9.0 running on this machine; agent converge-facilitator registered; 53 live ops; 3 real rooms; HAGGLE approval completed end to end in the real room; CONVERGE app wired to the real server (REAL-SWITCH mode, /api/status health ok). Tests 19/19, `npm run check` passes. See "2026-11-06 — real Switch integration" below.
+REAL-SWITCH LIVE: switch-core 0.31.0 + Mattermost 11.9.0 running on this machine; agent converge-facilitator registered; 53 live ops; 3 real rooms; HAGGLE approval completed end to end in the real room; CONVERGE app wired to the real server (REAL-SWITCH mode, /api/status health ok). Tests 20/20, `npm run check` passes. See "2026-11-06 — real Switch integration" below.
 
 ## Completed
-- Switch protocol verified live (docs + repo): Console 0.40.1 / core 0.31.0, WebSocket + HTTP ops, POST /agents, GET /ops, GET /health. Correction: SSE is legacy only, not the protocol. Notes in docs/switch-protocol-notes.md.
+- Switch protocol verified LIVE (2026-11-06, real server): Console 0.40.1 / core 0.31.0, **WebSocket is the live connection; this client uses the SSE compatibility path with a `POST /connection/beat` tick every 2s (TTL 6s)** + per-agent HTTP ops (`GET /agents/{id}/ops`, `POST /agents/{id}/ops/{name}`), `POST /agents`, `GET /health`. Room messages are not pushed on the stream — the agent reads them from the room timeline via `read_context`. Notes in docs/switch-protocol-notes.md (live-corrections banner) and docs/switch-live-integration.md.
 - Competitor validation (docs/competitor-validation.md): HAGGLE most crowded, COURT strongest, CORRECTION split. Sofra + Happi Happi NOT FOUND — removed from pitch. HeyMato mischaracterised — corrected. Cupi chat flow unverified — not cited.
 - UI/UX: 3 distinct directions + prototypes in docs/ui-directions/ (A Editorial, B Operations, C Spatial). **Direction B selected and built** (user viewed B and asked for more premium; premium operations workspace implemented in the app, commit 5aaa8ba), borrowing A's evidence discipline for Decision/Audit views.
 - Shared engine (server/engine.js): validated state machine (DRAFT→…→APPROVED→COMPLETED), human-only approval gate, deterministic HAGGLE maths, COURT conflict + blind tally, CORRECTION rule-based claim extraction + statuses.
@@ -12,7 +12,7 @@ REAL-SWITCH LIVE: switch-core 0.31.0 + Mattermost 11.9.0 running on this machine
 - COURT: CRT-007 ragù, 3 versions, conflict table (salt/fat/simmer conflict, tomato agrees).
 - CORRECTION: COR-003 Osei episode, 3 factual claims extracted, opinion separated; claim statuses and guest challenges now persist server-side and are audited (commit 3eaa59e).
 - Switch client + stub (server/switch-client.js, stub-switch.js): protocol-shaped, labelled SIMULATED everywhere.
-- Tests: 12/12 (8 engine + 4 server persistence tests in tests/engine.test.js and tests/server.test.js).
+- Tests: 20/20 (8 engine + 4 server persistence + 8 Switch-client tests in tests/engine.test.js, tests/server.test.js, tests/switch-client.test.js).
 
 ## Pending
 - Demo video (3-min HAGGLE arc + COURT/CORRECTION slices) — script exists (submission/demo-script.md); record against the live rooms.
@@ -70,7 +70,7 @@ REAL-SWITCH LIVE: switch-core 0.31.0 + Mattermost 11.9.0 running on this machine
 - Sync record: `~/workspace/converge.muse-github-snapshot-sync.json` (sibling
   of the source dir, never inside the repo). Update it after every confirmed
   snapshot push with the new commit SHA and submitted paths.
-- Before every sync: `npm test` (12/12), `npm run check`, live smoke test.
+- Before every sync: `npm test` (20/20), `npm run check`, live smoke test.
   After every sync: verify via the public GitHub API (commits list + root
   contents) and record the new head SHA here.
 - Binary files (PNG screenshots) CANNOT go through this route: `push_files`
@@ -112,7 +112,7 @@ REAL-SWITCH LIVE: switch-core 0.31.0 + Mattermost 11.9.0 running on this machine
   status table (protocol verified / deployment in progress / stub today /
   live integration not yet), the laptop run sheet is marked superseded,
   screenshot references no longer imply GitHub-hosted images; PROGRESS.md
-  current stage, UI selection, test count (12/12), CORRECTION claim count
+  current stage, UI selection, test count (20/20), CORRECTION claim count
   (3) and the stale laptop/GitHub-pending items corrected.
 - Second sync VERIFIED: snapshot push 4e72071 on top of a50f5a7 (history
   preserved, no force-push). 29 files. Verified via public API (commit list)
@@ -126,4 +126,22 @@ REAL-SWITCH LIVE: switch-core 0.31.0 + Mattermost 11.9.0 running on this machine
 - **Mattermost bridge active** (bcdd5c54…, default). **3 real rooms** in team switch: #haggle-dairyco, #recipe-ragu, #episode-osei — all verified from the Mattermost API.
 - **HAGGLE approval end to end in the real room:** agent analysis (event sw_4bccf918…) → owner approval posted in Mattermost → bridge delivered it to the agent's event stream → CONVERGE recorded APPROVED (human Owner, audited) → COMPLETED → confirmation posted back (event sw_6be113d1…). All four messages read back from Mattermost.
 - **CONVERGE app wired to the real server:** switch-client.js rewritten to the verified per-agent protocol (SSE stream, correct op paths, fixed agentProfile mediation arrays); server.js /api/switch/* use the live server when configured (rooms created on first post, ids persisted on cases); UI captions are mode-aware (REAL-SWITCH vs SIMULATED-STUB). App runs on :3100 with REAL-SWITCH mode; /api/status health {ok:true, status:200}; /api/switch/rooms lists the 3 real rooms. COURT post (sw_2cf273c1…) and CORRECTION post (sw_288dce6a…) went through the app and landed in Mattermost.
-- **Tests 19/19** (12 existing + 7 new switch-client tests incl. per-agent URL/header checks and the 53-op catalogue). `npm run check` clean.
+- **Tests 20/20** (12 existing + 8 new Switch-client tests incl. per-agent URL/header checks and the 53-op catalogue). `npm run check` clean.
+
+## 2026-11-06 ~00:05 Dhaka — third sync (ac9caef)
+- Snapshot push ac9caef on top of 4e72071 (history preserved). 35 files,
+  incl. docs/switch-live-integration.md, submission/evidence/switch-live/
+  (4 files), tests/switch-client.test.js. Verified via public API (commit
+  list) and by reading rooms-and-messages.md back from GitHub at the new
+  head. Sync record now has 3 entries.
+
+## 2026-11-06 ~00:10–00:20 Dhaka — final verification pass (Rubai's decision)
+- **Decision accepted:** native-process deployment is the real integration; no more runc/Compose attempts. Docs corrected to the observed behaviour (see below); security hardened to loopback-only.
+- **Security:** all services now bind 127.0.0.1 only (switch-core SERVER_HOST, Mattermost LISTENADDRESS, nginx listen, app listen; Postgres already loopback). Verified with `ss -tlnp`. VM has no public interface (lo + CGNAT host0 only).
+- **Bridge outage found and fixed:** after a switch-core-first restart the Mattermost bridge crashed at startup (login before Mattermost was up) and never recovered — human messages posted during the outage were never ingested into Switch and were NOT backfilled. Restarting switch-core after Mattermost restored ingestion (verified: fresh marker message in `read_context` within 10s). Restart order is now Mattermost → switch-core, documented in docs/switch-live-integration.md.
+- **How the agent receives human messages (corrected):** NOT via the event stream (connection/subscription events only) and NOT via the long-poll buffer (room_join only). Human messages are ingested by the bridge into Switch's room timeline; the agent reads them with `read_context`. Verified: owner's HAGGLE approval is in the HAG-014 timeline; fresh marker ingested post-restart.
+- **Transport corrected (second look):** the live connection IS the WebSocket at `/agents/{id}/connection/ws`; SSE is the pre-revision-7 compatibility path. An SSE client must tick `POST /agents/{id}/connection/beat` every 2s (TTL 6s) or be evicted with `heartbeat_lapsed` — verified (unbeaten stream evicted, beaten stream alive 20s+). `openEventStream` now beats automatically; new test covers it.
+- **Human-only approval gate re-verified live:** agent approval attempt on a synthetic AWAITING_APPROVAL case → rejected "Only a human may approve a case"; human approval → allowed. (Live API attempt on CRT-007 returned 400 for the invalid DISCUSSION → APPROVED transition; the gate itself is proven by engine.js:33-35 + tests/engine.test.js:42.)
+- **Health re-verified after all restarts:** /health 200 {"status":"ok"}, /health/ready all healthy incl. bridges; app REAL-SWITCH, /api/switch/rooms lists all 3 real rooms; HAGGLE room read back from Mattermost (8 posts, full arc intact).
+- **Tests 20/20** (12 existing + 8 Switch-client incl. the new beat test). `npm run check` clean.
+- **Label fix verified:** room drawer + footer are mode-aware — the drawer now shows the teal LIVE banner in REAL-SWITCH mode (re-captured screenshots confirm). Fresh live screenshots (7) + demo video (147.8s webm) captured from the live app.

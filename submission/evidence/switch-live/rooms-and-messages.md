@@ -62,3 +62,26 @@ presented as live here.
   `{ok: true, status: 200, body: {"status":"ok"}}`.
 - `GET /api/switch/rooms` → the 3 real rooms from the live server.
 - Tests: `npm test` **19/19** (12 existing + 7 new Switch-client tests).
+
+## Re-verification (2026-11-06 ~00:10–00:20 Dhaka)
+- After localhost-bind restarts: `GET /health` 200 `{"status":"ok"}`,
+  `/health/ready` 200 all healthy (bridges healthy); app
+  `switchMode: REAL-SWITCH`, health ok; `/api/switch/rooms` lists all 3
+  real rooms. HAGGLE room read back from Mattermost: 8 posts, full arc
+  intact (analysis → owner approval → confirmation → closure).
+- Bridge outage found: a switch-core-first restart crashed the Mattermost
+  bridge at startup (login before Mattermost was up); human messages posted
+  during the outage were never ingested and NOT backfilled. Restarting
+  switch-core after Mattermost restored ingestion — verified with a fresh
+  marker message appearing in `read_context` within 10s.
+- Agent receipt of human messages: via the bridge into Switch's room
+  timeline, read with `read_context` (the owner's approval is in the
+  HAG-014 timeline). NOT via the event stream (connection/subscription
+  events only) and NOT via the long-poll buffer (room_join only).
+- Transport: live connection is the WebSocket at
+  `/agents/{id}/connection/ws`; SSE is the compatibility path with a
+  `POST /agents/{id}/connection/beat` tick every 2s (TTL 6s) — verified
+  (unbeaten stream evicted with `heartbeat_lapsed`, beaten stream alive).
+- Approval gate: agent approval rejected ("Only a human may approve a
+  case"), human approval allowed — verified against the live engine.
+- Security: all services bind 127.0.0.1 only (verified with `ss -tlnp`).

@@ -24,13 +24,13 @@ Not any single feature — invoice→dish-margin, negotiation agents, recipe ver
 ## 6. How does SWITCH participate?
 Switch is central — without it there is no shared room, no multi-party work, no approval in chat. Each case has a Mattermost room (`#haggle-dairyco`, `#recipe-ragu`, `#episode-osei`) with humans + agents, room Instructions bounding each agent, and roles (owner, supplier, negotiator, analyst, facilitator, verifier). Agents: Facilitator, Researcher, Analyst (deterministic tools only for money/maths), Challenger/Auditor, and workflow specialists via role instructions. One agent hands work to another with a message — there is no separate task protocol.
 
-**Protocol (verified 2026-11-05, Console 0.40.1 / switch-core 0.31.0):** WebSocket events + HTTP ops (SSE is legacy fallback only). `GET /health` probe, `POST /agents` → `{id, api_key}` once, event stream `/agents/{id}/events`, ops via `GET /ops` + `POST /ops/{name}`. Per-operation JSON shapes must be read from a live server's `GET /ops` — they are not invented here. See `docs/switch-protocol-notes.md`.
+**Protocol (verified LIVE 2026-11-06 against the real switch-core 0.31.0 server, Console 0.40.1):** the live connection is the WebSocket at `/agents/{id}/connection/ws`; this client uses the SSE compatibility path (`GET /agents/{id}/events?connection_id=<uuid>`, `Accept: text/event-stream`, client-generated connection id) with a `POST /agents/{id}/connection/beat` tick every 2s (TTL 6s — an unbeaten stream is evicted with `heartbeat_lapsed`). Ops are per-agent: `GET /agents/{id}/ops` + `POST /agents/{id}/ops/{name}`, arguments object as the body. `post_message` needs `connect_to_room` first on the same connection id (`X-Switch-Connection-Id`). Room messages are NOT pushed on the stream — the agent reads human messages from the room timeline via the `read_context` op (verified: the owner's approval is in the HAG-014 timeline). `GET /health` is public. See `docs/switch-live-integration.md` and `docs/switch-protocol-notes.md` (live-corrections banner).
 
 **Switch status in this build: LIVE — real switch-core 0.31.0 + Mattermost 11.9.0 on this machine.** Verified 2026-11-06 (see `docs/switch-live-integration.md` and `submission/evidence/switch-live/`): `GET /health` → 200 `{"status":"ok"}`, all `/health/ready` checks healthy; agent `converge-facilitator` registered (`POST /agents` → 200); 53 live ops read from `GET /agents/{id}/ops`; Mattermost bridge active (default); three real rooms in team `switch` — `#haggle-dairyco`, `#recipe-ragu`, `#episode-osei` — with real messages verified from the Mattermost API. The HAGGLE approval ran end to end in the real room: agent analysis → owner approval in Mattermost → bridge delivery to the agent → human approval recorded in CONVERGE → confirmation back in the room.
 
 | Switch question | Status (2026-11-06) |
 | --- | --- |
-| Protocol verified | Yes — against the live server (Console 0.40.1 / core 0.31.0, SSE events + HTTP ops, `POST /agents`, per-agent ops, `GET /health`). Corrections recorded in `docs/switch-live-integration.md`. |
+| Protocol verified | Yes — against the live server (Console 0.40.1 / core 0.31.0, WebSocket is the live connection; this client uses the SSE compatibility path with a 2s heartbeat, per-agent ops, `POST /agents`, `GET /health`). Corrections recorded in `docs/switch-live-integration.md`. |
 | Deployment | Live on this machine. The container runtime cannot start containers here (runc setns is denied by the sandbox), so the published images' code runs natively as host processes with the Compose env — same software, same versions, same ports. Full record in `docs/switch-live-integration.md`. |
 | Demo today | REAL-SWITCH. The app's `/api/status` reports `REAL-SWITCH` with the live health probe; `/api/switch/*` talks to the real server. |
 | Simulated stub | Still shipped as the fallback when `SWITCH_BASE_URL` is unset, and still labelled SIMULATED everywhere it appears. It is never presented as real Switch. |
@@ -46,9 +46,9 @@ Supplier commitments, prices and contract terms, final recipe selection, editori
 ## 9. How to install and reproduce the demo
 ```
 node --version   # >= 22
-npm test         # 12/12 (8 engine + 4 server persistence tests)
+npm test         # 20/20 (8 engine + 4 server persistence + 8 Switch-client tests)
 npm run check    # node --check on all server files
-PORT=3000 npm start   # http://localhost:3000
+PORT=3100 npm start   # http://localhost:3100 (port 3000 is the Switch gateway)
 ```
 No npm dependencies, no database server: data is a JSON file in `data/converge.json`, seeded with fictional demo cases. Open HAG-014, see the analysis and strategies, post in the room (stub log), approve the $0.19 counter as Owner, and watch the audit trail. Then open CRT-007 (conflict table) and COR-003 (claims).
 

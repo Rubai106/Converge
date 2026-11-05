@@ -1,5 +1,34 @@
 # Switch integration — protocol notes (verified live)
 
+> **LIVE CORRECTIONS — 2026-11-06 (supersede the doc-based claims below).**
+> Verified against the real switch-core 0.31.0 server on this machine
+> (see `docs/switch-live-integration.md`):
+> - **Events are SSE, not WebSocket — CORRECTION (2026-11-06, second look).**
+>   The docstring in the live server's own event handler says the live
+>   connection is the **WebSocket at `/agents/{id}/connection/ws`**; the SSE
+>   stream is the compatibility path for pre-revision-7 runtimes, kept for
+>   a window. So the docs were right that WebSocket is current — the earlier
+>   "live server speaks SSE" correction overshot. What the live server
+>   actually requires of an SSE client: a `POST /agents/{id}/connection/beat`
+>   tick every 2s (TTL 6s), or the connection is evicted with
+>   `heartbeat_lapsed` (verified: unbeaten stream evicted, beaten stream
+>   stayed alive 20s+). Room messages are NOT pushed on the stream (it
+>   carries connection/subscription events) and do not appear in the
+>   long-poll buffer either — the agent reads human messages from the room
+>   timeline via the `read_context` op (verified: the owner's HAGGLE
+>   approval is in the HAG-014 timeline; a human message posted while the
+>   Mattermost bridge was down is NOT in the timeline and was never
+>   backfilled).
+> - **Ops are per-agent, not global.** `GET /agents/{id}/ops` lists them;
+>   `POST /agents/{id}/ops/{operation}` runs one, with the arguments
+>   object as the body. There is no live global `GET /ops` route.
+> - `post_message` needs `connect_to_room` first, on the same connection
+>   id (`X-Switch-Connection-Id`).
+> - `GET /health` is public → `{"status":"ok"}`; `/healthz` needs auth.
+> Everything below this banner is the pre-live research record (docs +
+> repo, 2026-11-05). It is kept for provenance; where it disagrees with
+> the live record, the live record wins.
+
 **Verified:** 2026-11-05, 16:07–16:09 UTC. All claims below come from the pages listed in
 §6; anything not found there is marked **UNVERIFIED**. Nothing in this file invents an
 endpoint, image name, or install step.
