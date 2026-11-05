@@ -26,7 +26,7 @@ export function seedData() {
           menuPrice: 16.0, monthlySales: 160, targetFoodCostPct: 30,
           targetPrice: 0.16, maxApprovedPrice: 0.20, recipe: 'Alfredo',
         },
-        switchRoom: '#haggle-dairyco',
+        switchRoom: '#haggle-dairyco', switchRoomId: null,
         proposals: [
           { id: 'P1', kind: 'proposal', text: 'Hold $0.16/fl oz for 4 weeks for a 25 L/week volume commitment.', status: 'proposed', by: 'Negotiation Agent' },
           { id: 'P2', kind: 'counter-offer', text: 'Supplier counters: $0.19/fl oz for 6 weeks, in writing.', status: 'proposed', by: 'DairyCo rep' },
@@ -72,7 +72,7 @@ export function seedData() {
           { reader: 'Reader B', sampleCode: 'S3', scores: { taste: 4, texture: 3, aroma: 3, appearance: 4, difficulty: 5, overall: 4 } },
           { reader: 'Reader C', sampleCode: 'S3', scores: { taste: 3, texture: 4, aroma: 3, appearance: 3, difficulty: 4, overall: 3 } },
         ],
-        switchRoom: '#recipe-ragu',
+        switchRoom: '#recipe-ragu', switchRoomId: null,
         proposals: [], pendingApproval: null, approval: null, audit: [], messages: [],
         evidence: [{ id: 'E1', type: 'photo', source: 'Handwritten card (demo)', status: 'Verified', note: 'Original card photo.' }],
       },
@@ -87,7 +87,7 @@ export function seedData() {
         transcript: 'I led the 2023 Clarion-Clipperton survey. We found that 40 percent of species there are still undescribed. I am a Professor of Marine Biology. I think deep-sea mining is the most important ocean issue of our time.',
         claimStatuses: {}, // claimId -> status, persisted (POST /api/correction/claim)
         claimChallenges: {}, // claimId -> {text, evidence, by}, persisted
-        switchRoom: '#episode-osei',
+        switchRoom: '#episode-osei', switchRoomId: null,
         proposals: [], pendingApproval: null, approval: null, audit: [], messages: [],
         evidence: [
           { id: 'E1', type: 'source', source: 'Lab page (demo)', status: 'Verified', note: 'Survey was co-led with Dr Chen.' },

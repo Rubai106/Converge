@@ -26,14 +26,16 @@ Switch is central — without it there is no shared room, no multi-party work, n
 
 **Protocol (verified 2026-11-05, Console 0.40.1 / switch-core 0.31.0):** WebSocket events + HTTP ops (SSE is legacy fallback only). `GET /health` probe, `POST /agents` → `{id, api_key}` once, event stream `/agents/{id}/events`, ops via `GET /ops` + `POST /ops/{name}`. Per-operation JSON shapes must be read from a live server's `GET /ops` — they are not invented here. See `docs/switch-protocol-notes.md`.
 
-**Honest Switch status in this build: SIMULATED-STUB.** The app ships a protocol-shaped client (`server/switch-client.js`) plus a local stub (`server/stub-switch.js`) implementing the same routes, with every stub transcript captioned "SIMULATED — stub server, not Switch". A genuine headless Switch deployment is in progress on this machine (Docker Engine install + official Compose stack, `switch-core` 0.31.0, profiles `collab` + `gateway`, bundled Mattermost) — see `docs/switch-deployment.md`. No laptop setup is required from the user. Until the real server answers `GET /health`, the stub is the honest fallback and is never presented as real Switch. To point the client at a real server, set `SWITCH_BASE_URL` + `SWITCH_API_KEY` — the client points at the real server by changing only those.
+**Switch status in this build: LIVE — real switch-core 0.31.0 + Mattermost 11.9.0 on this machine.** Verified 2026-11-06 (see `docs/switch-live-integration.md` and `submission/evidence/switch-live/`): `GET /health` → 200 `{"status":"ok"}`, all `/health/ready` checks healthy; agent `converge-facilitator` registered (`POST /agents` → 200); 53 live ops read from `GET /agents/{id}/ops`; Mattermost bridge active (default); three real rooms in team `switch` — `#haggle-dairyco`, `#recipe-ragu`, `#episode-osei` — with real messages verified from the Mattermost API. The HAGGLE approval ran end to end in the real room: agent analysis → owner approval in Mattermost → bridge delivery to the agent → human approval recorded in CONVERGE → confirmation back in the room.
 
-| Switch question | Status (2026-11-05) |
+| Switch question | Status (2026-11-06) |
 | --- | --- |
-| Protocol verified | Yes — from the official docs and repo (Console 0.40.1 / core 0.31.0, WebSocket + HTTP ops, `POST /agents`, `GET /ops`, `GET /health`). Not yet verified against a live server. |
-| Deployment attempt | In progress — Docker Engine installing on this VM, then the official Compose stack (`switch-v0.31.0`, `collab` + `gateway`). Slow apt mirror is the current bottleneck, not a design failure. |
-| Demo today | SIMULATED-STUB only. Every stub transcript is captioned as simulated. |
-| Live integration | Not yet achieved — no real Switch server, no real Mattermost room, no real agent registration yet. |
+| Protocol verified | Yes — against the live server (Console 0.40.1 / core 0.31.0, SSE events + HTTP ops, `POST /agents`, per-agent ops, `GET /health`). Corrections recorded in `docs/switch-live-integration.md`. |
+| Deployment | Live on this machine. The container runtime cannot start containers here (runc setns is denied by the sandbox), so the published images' code runs natively as host processes with the Compose env — same software, same versions, same ports. Full record in `docs/switch-live-integration.md`. |
+| Demo today | REAL-SWITCH. The app's `/api/status` reports `REAL-SWITCH` with the live health probe; `/api/switch/*` talks to the real server. |
+| Simulated stub | Still shipped as the fallback when `SWITCH_BASE_URL` is unset, and still labelled SIMULATED everywhere it appears. It is never presented as real Switch. |
+
+To point the app at the real server, set `SWITCH_BASE_URL`, `SWITCH_API_KEY`, `SWITCH_AGENT_ID` (and `SWITCH_BRIDGE_ID`, optional) — see `.env.example`.
 
 ## 7. Which agents exist?
 Facilitator (coordinates, tracks progress, blocks premature completion), Researcher (collects evidence, records uncertainty), Analyst (deterministic calculations only), Challenger/Auditor (challenges unsupported conclusions, checks assumptions), Workflow Specialist (negotiation / adjudication / correction instructions per room).
@@ -51,8 +53,8 @@ PORT=3000 npm start   # http://localhost:3000
 No npm dependencies, no database server: data is a JSON file in `data/converge.json`, seeded with fictional demo cases. Open HAG-014, see the analysis and strategies, post in the room (stub log), approve the $0.19 counter as Owner, and watch the audit trail. Then open CRT-007 (conflict table) and COR-003 (claims).
 
 ## 10. Limitations
-- Switch demo here is the labelled stub, not a live Switch server (see §6 and the status table above). The real-server deployment path is the headless Docker Compose stack in `docs/switch-deployment.md` (official self-host page, `switch-v0.31.0`); the laptop run sheet in `docs/switch-protocol-notes.md` §4 is superseded and must not be followed.
-- Demo supplier/guest are simulated and labelled; no agreement is real unless a real supplier accepted it.
+- The Switch integration is live (see §6); the labelled stub remains only as the fallback when `SWITCH_BASE_URL` is unset. The real-server deployment path is the native run documented in `docs/switch-live-integration.md` (the container runtime cannot start containers on this VM — runc setns is denied — so the published images' code runs as host processes; the headless Compose stack in `docs/switch-deployment.md` is the reference it was derived from, and the laptop run sheet in `docs/switch-protocol-notes.md` §4 is superseded).
+- Demo supplier/guest are simulated and labelled; no agreement is real unless a real supplier accepted it. The HAGGLE approval in the demo was the owner's own approval in the real room, recorded by the app — the supplier counter itself is still demo data.
 - COURT panel is deliberation, not statistics. CORRECTION claim extraction is rule-based, not a verified fact-checker; citations must be supplied as evidence, never fabricated.
 - UI is the premium Direction B operations workspace (Inter + IBM Plex Mono, bullet graph, dense tables, two-step approval) — see `docs/ui-directions.md` and the HTML prototypes there. Screenshots live in `submission/screenshots/` (see its README): the four premium shots are the submission assets, but **the PNG files are not in this GitHub repository yet** — the available GitHub integration is text-only and rejects binary uploads. Do not treat a screenshot reference as a GitHub-hosted image until that upload succeeds.
 

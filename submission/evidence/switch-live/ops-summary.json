@@ -1,0 +1,501 @@
+{
+  "server": "switch-core 0.31.0",
+  "ops_count": 53,
+  "operations": {
+    "add_users_to_room": {
+      "required": [
+        "room_id",
+        "user_names"
+      ],
+      "properties": [
+        "room_id",
+        "user_names"
+      ]
+    },
+    "archive_room": {
+      "required": [
+        "room_id"
+      ],
+      "properties": [
+        "room_id"
+      ]
+    },
+    "assume_role": {
+      "required": [
+        "role"
+      ],
+      "properties": [
+        "role"
+      ]
+    },
+    "attach_reference_to_room": {
+      "required": [
+        "room_id",
+        "reference_id"
+      ],
+      "properties": [
+        "room_id",
+        "reference_id"
+      ]
+    },
+    "connect_to_room": {
+      "required": [
+        "room_id"
+      ],
+      "properties": [
+        "room_id",
+        "include_general_instructions"
+      ]
+    },
+    "create_reference": {
+      "required": [
+        "type",
+        "name",
+        "description",
+        "instructions",
+        "value"
+      ],
+      "properties": [
+        "type",
+        "name",
+        "description",
+        "instructions",
+        "value",
+        "read_visibility",
+        "write_visibility"
+      ]
+    },
+    "create_room": {
+      "required": [
+        "name",
+        "description",
+        "agent_names"
+      ],
+      "properties": [
+        "name",
+        "description",
+        "agent_names",
+        "user_names",
+        "channel_type",
+        "bridge_id",
+        "internal_only",
+        "admin_mode",
+        "security_config",
+        "instructions",
+        "reference_ids",
+        "package_ids",
+        "linked_rooms",
+        "read_visibility",
+        "write_visibility",
+        "group_name",
+        "roles",
+        "include_subagents_for",
+        "join_event_listeners",
+        "aliases"
+      ]
+    },
+    "create_room_document": {
+      "required": [
+        "name",
+        "description",
+        "instructions",
+        "content"
+      ],
+      "properties": [
+        "name",
+        "description",
+        "instructions",
+        "content"
+      ]
+    },
+    "create_room_from_yaml": {
+      "required": [
+        "yaml"
+      ],
+      "properties": [
+        "yaml",
+        "inputs"
+      ]
+    },
+    "create_room_group": {
+      "required": [
+        "name"
+      ],
+      "properties": [
+        "name",
+        "description",
+        "color",
+        "parent_group_name"
+      ]
+    },
+    "define_role": {
+      "required": [
+        "name",
+        "instructions"
+      ],
+      "properties": [
+        "name",
+        "instructions",
+        "exclusive"
+      ]
+    },
+    "delete_role": {
+      "required": [
+        "name"
+      ],
+      "properties": [
+        "name"
+      ]
+    },
+    "delete_room_document": {
+      "required": [
+        "document_id"
+      ],
+      "properties": [
+        "document_id"
+      ]
+    },
+    "delete_template": {
+      "required": [
+        "template_id"
+      ],
+      "properties": [
+        "template_id"
+      ]
+    },
+    "edit_role": {
+      "required": [
+        "name"
+      ],
+      "properties": [
+        "name",
+        "instructions",
+        "exclusive"
+      ]
+    },
+    "get_agent_detail": {
+      "required": [
+        "agent_id"
+      ],
+      "properties": [
+        "agent_id"
+      ]
+    },
+    "get_my_context": {
+      "required": null,
+      "properties": []
+    },
+    "get_role_detail": {
+      "required": [
+        "room_id",
+        "role_name"
+      ],
+      "properties": [
+        "room_id",
+        "role_name"
+      ]
+    },
+    "get_room_detail": {
+      "required": [
+        "room_id"
+      ],
+      "properties": [
+        "room_id"
+      ]
+    },
+    "get_room_group_detail": {
+      "required": [
+        "group_id"
+      ],
+      "properties": [
+        "group_id"
+      ]
+    },
+    "get_template": {
+      "required": [
+        "template_id"
+      ],
+      "properties": [
+        "template_id"
+      ]
+    },
+    "get_template_guide": {
+      "required": null,
+      "properties": []
+    },
+    "invite_agent_to_room": {
+      "required": [
+        "room_id",
+        "agent_name"
+      ],
+      "properties": [
+        "room_id",
+        "agent_name",
+        "include_subagents"
+      ]
+    },
+    "link_rooms": {
+      "required": [
+        "source_room_id",
+        "target_room_id",
+        "label"
+      ],
+      "properties": [
+        "source_room_id",
+        "target_room_id",
+        "label"
+      ]
+    },
+    "list_agents": {
+      "required": null,
+      "properties": [
+        "name_contains",
+        "owner_name",
+        "known_agent_type"
+      ]
+    },
+    "list_all_references": {
+      "required": null,
+      "properties": [
+        "name_contains",
+        "type",
+        "owner_name"
+      ]
+    },
+    "list_all_rooms": {
+      "required": null,
+      "properties": [
+        "include_archived"
+      ]
+    },
+    "list_bridges": {
+      "required": null,
+      "properties": []
+    },
+    "list_linked_rooms": {
+      "required": null,
+      "properties": []
+    },
+    "list_participants": {
+      "required": null,
+      "properties": []
+    },
+    "list_reference_types": {
+      "required": null,
+      "properties": []
+    },
+    "list_references": {
+      "required": null,
+      "properties": []
+    },
+    "list_roles": {
+      "required": null,
+      "properties": []
+    },
+    "list_room_groups": {
+      "required": null,
+      "properties": []
+    },
+    "list_rooms": {
+      "required": null,
+      "properties": [
+        "include_archived"
+      ]
+    },
+    "list_templates": {
+      "required": null,
+      "properties": [
+        "query",
+        "kind"
+      ]
+    },
+    "load_internal_documents": {
+      "required": [
+        "ids"
+      ],
+      "properties": [
+        "ids"
+      ]
+    },
+    "post_message": {
+      "required": [
+        "body"
+      ],
+      "properties": [
+        "body",
+        "thread_id"
+      ]
+    },
+    "read_context": {
+      "required": null,
+      "properties": [
+        "limit",
+        "since",
+        "before",
+        "room_id"
+      ]
+    },
+    "release_role": {
+      "required": null,
+      "properties": []
+    },
+    "remove_agent_from_room": {
+      "required": [
+        "room_id",
+        "agent_name"
+      ],
+      "properties": [
+        "room_id",
+        "agent_name"
+      ]
+    },
+    "remove_agent_service": {
+      "required": [
+        "agent_name",
+        "service"
+      ],
+      "properties": [
+        "agent_name",
+        "service"
+      ]
+    },
+    "request_agent_deletion": {
+      "required": [
+        "agent_id"
+      ],
+      "properties": [
+        "agent_id"
+      ]
+    },
+    "run_template": {
+      "required": [
+        "template_id"
+      ],
+      "properties": [
+        "template_id",
+        "inputs",
+        "agents"
+      ]
+    },
+    "save_template": {
+      "required": [
+        "name",
+        "description",
+        "yaml"
+      ],
+      "properties": [
+        "name",
+        "description",
+        "yaml",
+        "visibility",
+        "bypass_warnings"
+      ]
+    },
+    "send_targeted_message": {
+      "required": [
+        "body"
+      ],
+      "properties": [
+        "body",
+        "target_names",
+        "target_roles",
+        "thread_id"
+      ]
+    },
+    "set_agent_service": {
+      "required": [
+        "agent_name",
+        "service"
+      ],
+      "properties": [
+        "agent_name",
+        "service",
+        "access",
+        "resources"
+      ]
+    },
+    "unarchive_room": {
+      "required": [
+        "room_id"
+      ],
+      "properties": [
+        "room_id"
+      ]
+    },
+    "unlink_rooms": {
+      "required": [
+        "source_room_id",
+        "target_room_id"
+      ],
+      "properties": [
+        "source_room_id",
+        "target_room_id"
+      ]
+    },
+    "update_agent_detail": {
+      "required": [
+        "agent_id"
+      ],
+      "properties": [
+        "agent_id",
+        "name",
+        "description",
+        "display_name",
+        "icon_url",
+        "addressing",
+        "provider",
+        "model",
+        "advanced_config",
+        "instructions",
+        "auto_mode",
+        "auto_approve",
+        "directory",
+        "isolation",
+        "machine",
+        "desired_state"
+      ]
+    },
+    "update_room": {
+      "required": [
+        "room_id"
+      ],
+      "properties": [
+        "room_id",
+        "name",
+        "description",
+        "instructions",
+        "admin_mode",
+        "join_event_listeners",
+        "bridge_id",
+        "channel_type",
+        "external_channel_id",
+        "aliases"
+      ]
+    },
+    "update_room_document": {
+      "required": [
+        "document_id"
+      ],
+      "properties": [
+        "document_id",
+        "name",
+        "description",
+        "instructions",
+        "content"
+      ]
+    },
+    "update_template": {
+      "required": [
+        "template_id"
+      ],
+      "properties": [
+        "template_id",
+        "name",
+        "description",
+        "yaml",
+        "visibility",
+        "bypass_warnings"
+      ]
+    }
+  }
+}

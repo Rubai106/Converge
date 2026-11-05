@@ -1,8 +1,10 @@
 // CONVERGE server — Node 24, zero npm dependencies.
 // Serves the app, exposes the shared decision-engine API, and hosts the
-// SIMULATED Switch stub (see stub-switch.js). Real Switch: set
-// SWITCH_BASE_URL to a real server and SWITCH_API_KEY to a real agent key;
-// the stub is used only when SWITCH_BASE_URL is unset.
+// SIMULATED Switch stub (see stub-switch.js) when no real server is set.
+// Real Switch: set SWITCH_BASE_URL to a real server, SWITCH_API_KEY to a
+// real agent key and SWITCH_AGENT_ID to that agent's id; the stub is used
+// only when SWITCH_BASE_URL is unset. Verified live 2026-11-06 against
+// switch-core 0.31.0 (see docs/switch-live-integration.md).
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
@@ -10,14 +12,46 @@ import { fileURLToPath } from 'node:url';
 import { haggleAnalysis, haggleStrategies, courtConflicts, courtTally, extractClaims, setClaimStatus, transitionCase, audit, canTransition } from './engine.js';
 import { load, save, getCase } from './store.js';
 import { createStubState, stubHealth, stubRegisterAgent, stubGetOps, stubCallOp } from './stub-switch.js';
-import { probeHealth, SWITCH_VERSION } from './switch-client.js';
+import { probeHealth, getOps, callOp, withRoomConnection, registerAgent, agentProfile, SWITCH_VERSION } from './switch-client.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 3000);
 const SWITCH_BASE_URL = process.env.SWITCH_BASE_URL || '';
-const SWITCH_MODE = SWITCH_BASE_URL ? 'REAL-SWITCH (unverified here — run GET /health first)' : 'SIMULATED-STUB';
+const SWITCH_API_KEY = process.env.SWITCH_API_KEY || '';
+const SWITCH_AGENT_ID = process.env.SWITCH_AGENT_ID || '';
+const SWITCH_BRIDGE_ID = process.env.SWITCH_BRIDGE_ID || '';
+const SWITCH_MODE = SWITCH_BASE_URL ? 'REAL-SWITCH' : 'SIMULATED-STUB';
+const realSwitch = Boolean(SWITCH_BASE_URL && SWITCH_API_KEY && SWITCH_AGENT_ID);
 const stub = createStubState();
 let data = load();
+
+// Ensure a real Switch room exists for a case (creates it on first use via
+// the live create_room op, persists the room id on the case). Returns the
+// room id. Only used when realSwitch is true.
+async function ensureRealRoom(c) {
+  if (c.switchRoomId) return c.switchRoomId;
+  let bridgeId = SWITCH_BRIDGE_ID;
+  if (!bridgeId) {
+    const bridges = await callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'list_bridges', {});
+    const def = (bridges.result || []).find((b) => b.is_default) || (bridges.result || [])[0];
+    if (!def) throw new Error('no Switch bridge available');
+    bridgeId = def.id;
+  }
+  const roomName = (c.switchRoom || `#${c.id.toLowerCase()}`).replace(/^#/, '');
+  const res = await callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'create_room', {
+    name: roomName,
+    description: `${c.workflow}: ${c.title}`,
+    agent_names: ['converge-facilitator'],
+    user_names: ['user'],
+    bridge_id: bridgeId,
+    instructions: 'You are the CONVERGE facilitator. Use only the deterministic decision-engine maths. Never invent a price or a fact, never present a hypothetical agreement as real, never commit without the human owner approving it in this room.',
+  });
+  const roomId = res.result?.id;
+  if (!roomId) throw new Error('create_room returned no room id');
+  c.switchRoomId = roomId;
+  save(data);
+  return roomId;
+}
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.md': 'text/markdown' };
 
@@ -138,22 +172,45 @@ const server = createServer(async (req, res) => {
         return send(res, 200, claim);
       } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
     }
-    // --- API: Switch stub (SIMULATED) + real probe ---
+    // --- API: Switch — real server when configured, stub otherwise ---
     if (url.pathname === '/api/switch/health' && req.method === 'GET') {
       if (SWITCH_BASE_URL) return send(res, 200, await probeHealth(SWITCH_BASE_URL));
       return send(res, 200, stubHealth());
     }
-    if (url.pathname === '/api/switch/ops' && req.method === 'GET') return send(res, 200, stubGetOps());
-    if (url.pathname === '/api/switch/rooms' && req.method === 'GET') return send(res, 200, stubCallOp(stub, 'list_rooms'));
+    if (url.pathname === '/api/switch/ops' && req.method === 'GET') {
+      if (realSwitch) return send(res, 200, await getOps(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID));
+      return send(res, 200, stubGetOps());
+    }
+    if (url.pathname === '/api/switch/rooms' && req.method === 'GET') {
+      if (realSwitch) return send(res, 200, await callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'list_rooms', {}));
+      return send(res, 200, stubCallOp(stub, 'list_rooms'));
+    }
     if (url.pathname === '/api/switch/post' && req.method === 'POST') {
       const body = await readBody(req);
-      const msg = stubCallOp(stub, 'post_message', body);
       const c = getCase(data, body.caseId);
+      if (!c) return send(res, 404, { error: 'case not found' });
+      if (realSwitch) {
+        const roomId = await ensureRealRoom(c);
+        const result = await withRoomConnection(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, roomId, async (connectionId) => {
+          return callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'post_message', { body: body.text }, connectionId);
+        });
+        const eventId = result.result?.event_id || null;
+        const msg = { id: eventId || `real-${Date.now()}`, author: body.author || 'Mara (owner)', kind: 'human', text: body.text, at: new Date().toISOString(), room: c.switchRoom, roomId, eventId, real: true };
+        c.messages.push(msg);
+        audit(c, { name: body.author || 'Mara (owner)', kind: 'human' }, 'room-message', { room: c.switchRoom, roomId, eventId });
+        save(data);
+        return send(res, 200, msg);
+      }
+      const msg = stubCallOp(stub, 'post_message', body);
       if (c) { c.messages.push(msg); audit(c, { name: body.author || 'agent', kind: 'agent' }, 'room-message', { room: body.room }); save(data); }
       return send(res, 200, { ...msg, simulated: true, caption: 'SIMULATED — stub server, not Switch' });
     }
     if (url.pathname === '/api/switch/register' && req.method === 'POST') {
       const body = await readBody(req);
+      if (realSwitch) {
+        const profile = agentProfile(body.name || 'converge-facilitator', body.description || 'CONVERGE decision facilitator');
+        return send(res, 200, await registerAgent(SWITCH_BASE_URL, body.registrationKey, profile));
+      }
       return send(res, 200, { ...stubRegisterAgent(stub, body), simulated: true, caption: 'SIMULATED — stub server, not Switch' });
     }
     return send(res, 404, { error: 'not found' });

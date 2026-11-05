@@ -1,7 +1,8 @@
 // CONVERGE — premium operations workspace (Direction B, elevated).
 // All money/percentages come from the API (deterministic engine). Nothing
 // is hard-coded except labelled demo seed data (COURT blind scores) and
-// static product copy. Switch is SIMULATED-STUB until a real server exists.
+// static product copy. Switch mode comes from /api/status: REAL-SWITCH
+// when the app is pointed at a live server, SIMULATED-STUB otherwise.
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -131,7 +132,9 @@ function renderSwitchStatus() {
   $('#sidebar-switch').textContent = 'Switch: ' + text;
   const pill = $('#switch-pill');
   pill.textContent = '● ' + mode;
-  pill.title = 'Simulated stub — not a live Switch connection. No real Mattermost room yet.';
+  pill.title = mode === 'REAL-SWITCH'
+    ? 'Live Switch server (core 0.31.0) — rooms are real Mattermost channels via the Switch bridge.'
+    : 'Simulated stub — not a live Switch connection. No real Mattermost room yet.';
 }
 
 // ---------- shell ----------
@@ -699,7 +702,7 @@ function railPanels(c) {
   </section>`;
   const room = `<section class="panel" aria-labelledby="room-h"><h2 id="room-h">Switch room</h2>
     <p class="small"><span class="num">${esc(c.switchRoom)}</span> · ${(c.participants || []).length} members</p>
-    <p class="small muted" style="margin:6px 0 10px">SIMULATED — stub server, not Switch. Transcript opens in a drawer.</p>
+    <p class="small muted" style="margin:6px 0 10px">${statusData?.switchMode === 'REAL-SWITCH' ? 'Live Switch room — a real Mattermost channel via the Switch bridge. Messages here are real.' : 'SIMULATED — stub server, not Switch. Transcript opens in a drawer.'}</p>
     <button class="ghost-btn btn-sm" data-room-btn>Open room transcript</button>
   </section>`;
   const ev = `<section class="panel" aria-labelledby="evsum-h"><h2 id="evsum-h">Evidence</h2>
@@ -828,7 +831,7 @@ function renderRoom() {
   const msgs = c.messages || [];
   $('#room-log').innerHTML = msgs.length
     ? msgs.map((msg) => `<div class="room-msg"><div class="rm-head"><b>${esc(msg.author)}</b> · ${fmtTime(msg.at)} ${/agent/i.test(msg.author) ? '<span class="agent-tag">AGENT</span>' : ''}</div>${esc(msg.text)}</div>`).join('')
-    : '<p class="empty">No messages yet in this room. Post below — it goes to the SIMULATED stub transcript and is logged in the audit trail.</p>';
+    : '<p class="empty">No messages yet in this room. Post below — ' + (statusData?.switchMode === 'REAL-SWITCH' ? 'it goes to the live Switch room (real Mattermost channel) and is logged in the audit trail.' : 'it goes to the SIMULATED stub transcript and is logged in the audit trail.') + '</p>';
 }
 $('#drawer-close').addEventListener('click', closeRoom);
 $('#drawer-backdrop').addEventListener('click', closeRoom);

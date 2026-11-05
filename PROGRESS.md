@@ -1,7 +1,7 @@
 # CONVERGE — PROGRESS.md
 
-## Current stage (2026-11-05, ~22:53 Dhaka)
-Working v0.1.0: shared decision engine + HAGGLE end-to-end + COURT and CORRECTION slices + Switch protocol client + labelled stub + premium Direction B UI. Tests 12/12, `npm run check` passes, server verified live on localhost:3000 (`/api/status`, `/api/cases/HAG-014`, COURT tally, CORRECTION persistence). First push to the official repo verified (see below). Docker Engine install in progress for the genuine headless Switch deployment.
+## Current stage (2026-11-06, ~00:00 Dhaka)
+REAL-SWITCH LIVE: switch-core 0.31.0 + Mattermost 11.9.0 running on this machine; agent converge-facilitator registered; 53 live ops; 3 real rooms; HAGGLE approval completed end to end in the real room; CONVERGE app wired to the real server (REAL-SWITCH mode, /api/status health ok). Tests 19/19, `npm run check` passes. See "2026-11-06 — real Switch integration" below.
 
 ## Completed
 - Switch protocol verified live (docs + repo): Console 0.40.1 / core 0.31.0, WebSocket + HTTP ops, POST /agents, GET /ops, GET /health. Correction: SSE is legacy only, not the protocol. Notes in docs/switch-protocol-notes.md.
@@ -15,16 +15,15 @@ Working v0.1.0: shared decision engine + HAGGLE end-to-end + COURT and CORRECTIO
 - Tests: 12/12 (8 engine + 4 server persistence tests in tests/engine.test.js and tests/server.test.js).
 
 ## Pending
-- Genuine Switch deployment on THIS VM (headless Docker Compose, `switch-v0.31.0`, profiles `collab` + `gateway`). Docker Engine install in progress since ~22:25 Dhaka; bottleneck is a very slow apt mirror (cogentco), log at /tmp/docker-install.log. **No laptop setup from Rubai — that path is retired.** Needs after Docker: `docker compose up -d`, `GET /health` evidence, agent registration, real HAGGLE room in Mattermost.
+- Demo video (3-min HAGGLE arc + COURT/CORRECTION slices) — script exists (submission/demo-script.md); record against the live rooms.
 - Wispr voice log: entries only as Rubai dictates; genuine Insights screenshot at submission (never fake).
-- Demo video (3-min HAGGLE arc + COURT/CORRECTION slices), final screenshots, submission pack.
 - GitHub sync: repo Rubai106/accordweave is canonical (main). Sync via the connector snapshot push (see "GitHub sync strategy" below); the 7 PNG screenshots still await a binary-capable upload route.
 
 ## Known problems
-- Server runs in SIMULATED-STUB mode here. Do not present stub transcripts as Switch rooms.
+- The app runs in REAL-SWITCH mode when SWITCH_BASE_URL/API key/agent id are set, and in SIMULATED-STUB mode otherwise. The stub is still shipped as the fallback — do not present stub transcripts as Switch rooms.
 - UI prototype HAGGLE numbers used monthly = weekly×52/12 ($83.20/mo, $998/yr); app engine uses monthlySales=160 explicitly ($76.80/mo, $921.60/yr). Engine is the source of truth; prototype numbers are research, not app data.
-- Node global WebSocket takes no headers argument — production Switch client needs a WS library supporting Authorization: Bearer. Recorded in switch-client.js, not hidden.
-- Per-operation JSON payload shapes unverified (must come from live GET /ops).
+- Node global WebSocket takes no headers argument, so the live client uses the SSE event stream (verified live). The old "needs a WS library" note is superseded — see switch-client.js.
+- The live Switch stack runs natively (not in containers) because the sandbox denies runc setns; a VM replacement wipes Docker/Postgres/nginx and the stack must be rebuilt from ~/workspace/switch-server/ (see docs/switch-live-integration.md §Restarting). The agent id/key and bridge id survive in ~/workspace, so re-registration is not needed.
 
 ## Technical decisions
 - Node 24, zero npm dependencies (npm registry reachable, but zero-dep keeps the demo reproducible in the sandbox and on a laptop). JSON file store, not PostgreSQL — justified for a 2-day demo; schema in README §7 maps to Postgres tables if scaled.
@@ -94,3 +93,37 @@ Working v0.1.0: shared decision engine + HAGGLE end-to-end + COURT and CORRECTIO
 - Demo today: SIMULATED-STUB only, every transcript captioned as simulated.
 - Live integration: NOT achieved. No real server, no real Mattermost room,
   no real agent registration, no real HAGGLE room message yet.
+
+## 2026-11-05 ~22:53 Dhaka — second sync + screenshot/binary investigation
+- Investigated the Git Data API binary route as requested: the GitHub MCP
+  catalogue has 49 tools and NONE of `create_blob` / `create_tree` /
+  `create_commit` / `update_ref`. `create_or_update_file` takes text only
+  ("Do not base64-encode it; this server does that before calling the REST
+  API") and `push_files` validates UTF-8 and rejects binaries. Direct REST
+  calls would need a token we do not have and must not invent. Conclusion:
+  binary upload is genuinely blocked from this VM until a credentialed
+  `git push` or the GitHub web upload is available. Nothing was fabricated
+  to work around it.
+- Screenshots organized: 4 premium submission assets at
+  submission/screenshots/ (dashboard, HAGGLE, COURT, CORRECTION); 3 temp-UI
+  shots moved to submission/screenshots/archive/temp-ui-2026-11-05/.
+  submission/screenshots/README.md documents both + the GitHub status.
+- README/PROGRESS/checklist inconsistencies fixed: README now has a Switch
+  status table (protocol verified / deployment in progress / stub today /
+  live integration not yet), the laptop run sheet is marked superseded,
+  screenshot references no longer imply GitHub-hosted images; PROGRESS.md
+  current stage, UI selection, test count (12/12), CORRECTION claim count
+  (3) and the stale laptop/GitHub-pending items corrected.
+- Second sync VERIFIED: snapshot push 4e72071 on top of a50f5a7 (history
+  preserved, no force-push). 29 files. Verified via public API (commit list)
+  and by reading submission/screenshots/README.md back from GitHub at the
+  new head. Sync record now has 2 entries.
+
+## 2026-11-06 ~00:00 Dhaka — REAL Switch integration (live)
+- **GET /health → 200 {"status":"ok"}; /health/ready → 200, all 7 checks healthy.** Real switch-core 0.31.0 + Mattermost 11.9.0 + gateway on this machine. Deployment record: docs/switch-live-integration.md. Evidence: submission/evidence/switch-live/ (health.json, health-ready.json, ops-summary.json, rooms-and-messages.md).
+- **Docker Compose path BLOCKED by the sandbox, worked around honestly:** dead apt mirror fixed (cogentco removed); Docker 29.9.3 installed but dockerd has no NET_ADMIN (no iptables/bridge); Go registry clients time out (Python OCI puller fetched all 5 images); containers cannot start at all (runc setns EPERM). The published images' code runs natively as host processes with the Compose env — same software, versions, ports. A VM replacement wiped Docker once mid-work; everything rebuildable is under ~/workspace/switch-server/.
+- **Agent registered live:** converge-facilitator, id de9ceb8a-510c-4eef-9a31-c2094c346a12 (POST /agents → 200). **53 live ops** from GET /agents/{id}/ops. Protocol corrections verified: ops are per-agent, event stream is SSE with client-generated connection_id, post_message needs connect_to_room first, /healthz needs auth (401).
+- **Mattermost bridge active** (bcdd5c54…, default). **3 real rooms** in team switch: #haggle-dairyco, #recipe-ragu, #episode-osei — all verified from the Mattermost API.
+- **HAGGLE approval end to end in the real room:** agent analysis (event sw_4bccf918…) → owner approval posted in Mattermost → bridge delivered it to the agent's event stream → CONVERGE recorded APPROVED (human Owner, audited) → COMPLETED → confirmation posted back (event sw_6be113d1…). All four messages read back from Mattermost.
+- **CONVERGE app wired to the real server:** switch-client.js rewritten to the verified per-agent protocol (SSE stream, correct op paths, fixed agentProfile mediation arrays); server.js /api/switch/* use the live server when configured (rooms created on first post, ids persisted on cases); UI captions are mode-aware (REAL-SWITCH vs SIMULATED-STUB). App runs on :3100 with REAL-SWITCH mode; /api/status health {ok:true, status:200}; /api/switch/rooms lists the 3 real rooms. COURT post (sw_2cf273c1…) and CORRECTION post (sw_288dce6a…) went through the app and landed in Mattermost.
+- **Tests 19/19** (12 existing + 7 new switch-client tests incl. per-agent URL/header checks and the 53-op catalogue). `npm run check` clean.

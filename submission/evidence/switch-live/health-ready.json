@@ -1,0 +1,1 @@
+{"status":"ready","checks":{"database":{"healthy":true},"message_listener":{"healthy":true},"session_activity_listener":{"healthy":true},"agent_event_listener":{"healthy":true},"signal_bus":{"healthy":true},"bridges":{"healthy":true},"connectors":{"healthy":true}}}
