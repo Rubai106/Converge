@@ -28,6 +28,13 @@ Switch is central — without it there is no shared room, no multi-party work, n
 
 **Honest Switch status in this build: SIMULATED-STUB.** The app ships a protocol-shaped client (`server/switch-client.js`) plus a local stub (`server/stub-switch.js`) implementing the same routes, with every stub transcript captioned "SIMULATED — stub server, not Switch". A genuine headless Switch deployment is in progress on this machine (Docker Engine install + official Compose stack, `switch-core` 0.31.0, profiles `collab` + `gateway`, bundled Mattermost) — see `docs/switch-deployment.md`. No laptop setup is required from the user. Until the real server answers `GET /health`, the stub is the honest fallback and is never presented as real Switch. To point the client at a real server, set `SWITCH_BASE_URL` + `SWITCH_API_KEY` — the client points at the real server by changing only those.
 
+| Switch question | Status (2026-11-05) |
+| --- | --- |
+| Protocol verified | Yes — from the official docs and repo (Console 0.40.1 / core 0.31.0, WebSocket + HTTP ops, `POST /agents`, `GET /ops`, `GET /health`). Not yet verified against a live server. |
+| Deployment attempt | In progress — Docker Engine installing on this VM, then the official Compose stack (`switch-v0.31.0`, `collab` + `gateway`). Slow apt mirror is the current bottleneck, not a design failure. |
+| Demo today | SIMULATED-STUB only. Every stub transcript is captioned as simulated. |
+| Live integration | Not yet achieved — no real Switch server, no real Mattermost room, no real agent registration yet. |
+
 ## 7. Which agents exist?
 Facilitator (coordinates, tracks progress, blocks premature completion), Researcher (collects evidence, records uncertainty), Analyst (deterministic calculations only), Challenger/Auditor (challenges unsupported conclusions, checks assumptions), Workflow Specialist (negotiation / adjudication / correction instructions per room).
 
@@ -44,10 +51,10 @@ PORT=3000 npm start   # http://localhost:3000
 No npm dependencies, no database server: data is a JSON file in `data/converge.json`, seeded with fictional demo cases. Open HAG-014, see the analysis and strategies, post in the room (stub log), approve the $0.19 counter as Owner, and watch the audit trail. Then open CRT-007 (conflict table) and COR-003 (claims).
 
 ## 10. Limitations
-- Switch demo here is the labelled stub, not a live Switch server (see §6). Real-server run sheet is in `docs/switch-protocol-notes.md` §4.
+- Switch demo here is the labelled stub, not a live Switch server (see §6 and the status table above). The real-server deployment path is the headless Docker Compose stack in `docs/switch-deployment.md` (official self-host page, `switch-v0.31.0`); the laptop run sheet in `docs/switch-protocol-notes.md` §4 is superseded and must not be followed.
 - Demo supplier/guest are simulated and labelled; no agreement is real unless a real supplier accepted it.
 - COURT panel is deliberation, not statistics. CORRECTION claim extraction is rule-based, not a verified fact-checker; citations must be supplied as evidence, never fabricated.
-- UI is the premium Direction B operations workspace (Inter + IBM Plex Mono, bullet graph, dense tables, two-step approval) — see `docs/ui-directions.md` and `submission/screenshots/premium-*.png`.
+- UI is the premium Direction B operations workspace (Inter + IBM Plex Mono, bullet graph, dense tables, two-step approval) — see `docs/ui-directions.md` and the HTML prototypes there. Screenshots live in `submission/screenshots/` (see its README): the four premium shots are the submission assets, but **the PNG files are not in this GitHub repository yet** — the available GitHub integration is text-only and rejects binary uploads. Do not treat a screenshot reference as a GitHub-hosted image until that upload succeeds.
 
 ## Submission
 - Track: Best Business Workflow ($2,000) + Code with Wispr ($500, side track)
