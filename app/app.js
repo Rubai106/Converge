@@ -27,8 +27,8 @@ const TRANSITIONS = {
   APPROVED: ['COMPLETED', 'BLOCKED'], COMPLETED: [],
   REJECTED: ['DISCUSSION', 'CANCELLED'], BLOCKED: ['INTAKE', 'INVESTIGATING', 'DISCUSSION', 'CANCELLED'], CANCELLED: [],
 };
-const STEPS = ['Draft', 'Investigating', 'Proposal', 'Awaiting approval', 'Approved'];
-const STEP_INDEX = { DRAFT: 0, INTAKE: 0, INVESTIGATING: 1, DISCUSSION: 2, PROPOSAL: 2, AWAITING_APPROVAL: 3, APPROVED: 4, COMPLETED: 4 };
+const STEPS = ['Draft', 'Investigating', 'Discussion', 'Proposal', 'Awaiting approval', 'Approved'];
+const STEP_INDEX = { DRAFT: 0, INTAKE: 0, INVESTIGATING: 1, DISCUSSION: 2, PROPOSAL: 3, AWAITING_APPROVAL: 4, APPROVED: 5, COMPLETED: 5 };
 const TERMINAL_NEG = ['REJECTED', 'BLOCKED', 'CANCELLED'];
 
 // HAGGLE strategy -> approval terms. Terms text is the exact wording the
@@ -128,24 +128,37 @@ async function loadAll() {
 }
 function renderSwitchStatus() {
   const mode = statusData?.switchMode || 'SIMULATED-STUB';
+  const live = mode === 'REAL-SWITCH';
+  const unreachable = mode === 'SWITCH-UNREACHABLE';
+  // BUG-3 (QA 2026-11-06): the mode is health-derived on the server
+  // now, so an unreachable server shows SWITCH-UNREACHABLE here instead
+  // of a false LIVE. Nothing in this function may claim "live" unless
+  // the health probe succeeded.
   const text = `${mode} — Console 0.40.1 / core 0.31.0`;
   $('#sidebar-switch').textContent = 'Switch: ' + text;
   const pill = $('#switch-pill');
   pill.textContent = '● ' + mode;
-  pill.title = mode === 'REAL-SWITCH'
+  pill.title = live
     ? 'Live Switch server (core 0.31.0) — rooms are real Mattermost channels via the Switch bridge.'
+    : unreachable
+    ? 'Switch is configured but the server did not answer the health probe. Rooms and messages are NOT live right now.'
     : 'Simulated stub — not a live Switch connection. No real Mattermost room yet.';
   const drawerLabel = $('#drawer-sim-label');
   if (drawerLabel) {
-    drawerLabel.textContent = mode === 'REAL-SWITCH'
+    drawerLabel.textContent = live
       ? 'LIVE — real Switch room (Mattermost channel via the Switch bridge). Messages here are real.'
+      : unreachable
+      ? 'UNREACHABLE — Switch server configured but not responding. Messages here will not be delivered.'
       : 'SIMULATED — stub server, not Switch. Messages here are demo transcript only.';
-    drawerLabel.classList.toggle('live-label', mode === 'REAL-SWITCH');
+    drawerLabel.classList.toggle('live-label', live);
+    drawerLabel.classList.toggle('warn-label', unreachable);
   }
   const footerNote = $('#footer-switch-note');
   if (footerNote) {
-    footerNote.textContent = mode === 'REAL-SWITCH'
+    footerNote.textContent = live
       ? 'Switch integration is LIVE — real switch-core 0.31.0 + Mattermost via the Switch bridge (see docs/switch-live-integration.md).'
+      : unreachable
+      ? 'Switch integration is configured but the server is currently unreachable — the pill above shows SWITCH-UNREACHABLE until the health probe succeeds.'
       : 'Switch integration is a labelled simulation until a real Switch server (Console 0.40.1 / core 0.31.0) is connected.';
   }
 }
@@ -217,6 +230,10 @@ function casesTableRows(list) {
 }
 function bindCaseRows(root) {
   $$('[data-open]', root).forEach((row) => {
+    // Rows are keyboard-operable: the Enter/Space handler below only
+    // fires when the row can receive focus (QA 2026-11-06 — Workflows
+    // and Evidence rows were mouse-only).
+    row.tabIndex = 0;
     row.addEventListener('click', () => openCase(row.dataset.open));
     row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCase(row.dataset.open); } });
   });
@@ -295,7 +312,7 @@ function renderCasesView() {
 function renderWorkflows() {
   setBreadcrumb('Workflows');
   const rows = [
-    ['HAGGLE', 'Margin-aware supplier negotiation', 'Draft → Investigating → Proposal → Awaiting approval → Approved', 'HAG-014', 'Negotiation Agent, Financial Analyst'],
+    ['HAGGLE', 'Margin-aware supplier negotiation', 'Draft → Investigating → Discussion → Proposal → Awaiting approval → Approved → Completed', 'HAG-014', 'Negotiation Agent, Financial Analyst'],
     ['COURT', 'Blind recipe testing and adjudication', 'Intake → Investigating → Discussion → Proposal → Approved', 'CRT-007', 'Facilitator Agent'],
     ['CORRECTION', 'Evidence-backed factual correction', 'Intake → Investigating → Discussion → Proposal → Approved', 'COR-003', 'Verification Agent'],
   ];
@@ -366,7 +383,7 @@ function renderSettingsView() {
       <dl class="kv">
         <dt>Switch mode</dt><dd>${esc(statusData?.switchMode || '—')}</dd>
         <dt>Switch Console / core</dt><dd>0.40.1 / 0.31.0</dd>
-        <dt>Switch health</dt><dd>${esc(statusData?.switchHealth?.status || statusData?.switchHealth?.note || '—')}</dd>
+        <dt>Switch health</dt><dd>${esc((() => { const sh = statusData?.switchHealth; if (!sh) return '—'; if (sh.status !== undefined) return String(sh.status); if (sh.note) return sh.note; if (sh.ok === false) return `Unreachable — ${sh.error || 'health probe failed'}`; return '—'; })())}</dd>
         <dt>Cases in workspace</dt><dd>${cases.length}</dd>
         <dt>Demo data</dt><dd>Fictional — labelled throughout</dd>
       </dl>
@@ -403,11 +420,11 @@ function renderCase() {
     <p class="inline-error" id="case-error" role="alert" hidden></p>
     <ol class="stepper" aria-label="Workflow stage">${stepper}</ol>
     <div class="tabs" role="tablist" aria-label="Case sections">
-      ${tabs.map(([id, label]) => `<button class="tab ${currentTab === id ? 'is-active' : ''}" role="tab" aria-selected="${currentTab === id}" data-tab="${id}">${label}</button>`).join('')}
+      ${tabs.map(([id, label]) => `<button class="tab ${currentTab === id ? 'is-active' : ''}" role="tab" id="tab-${id}" aria-selected="${currentTab === id}" aria-controls="case-main" data-tab="${id}">${label}</button>`).join('')}
     </div>
     <div class="case-grid">
       <div class="col-stack">${summaryPanel(c)}</div>
-      <div class="col-stack" id="case-main">${tabContent(c)}</div>
+      <div class="col-stack" id="case-main" role="tabpanel" aria-labelledby="tab-${currentTab}">${tabContent(c)}</div>
       <div class="rail"><div class="col-stack">${railPanels(c)}</div></div>
     </div>`;
   $('#back-btn').addEventListener('click', backToDashboard);
@@ -416,6 +433,18 @@ function renderCase() {
     try { await transition(c.id, to); } catch (e) { showCaseError(e.message); }
   });
   $$('.tab', $('#view')).forEach((t) => t.addEventListener('click', () => { currentTab = t.dataset.tab; renderCase(); }));
+  // Arrow-key navigation across tabs (QA 2026-11-06): the tabs had
+  // role=tab/aria-selected but no keyboard pattern.
+  $$('.tab', $('#view')).forEach((t) => t.addEventListener('keydown', (e) => {
+    const ids = tabs.map(([id]) => id);
+    const i = ids.indexOf(t.dataset.tab);
+    let next = null;
+    if (e.key === 'ArrowRight') next = ids[(i + 1) % ids.length];
+    else if (e.key === 'ArrowLeft') next = ids[(i - 1 + ids.length) % ids.length];
+    else if (e.key === 'Home') next = ids[0];
+    else if (e.key === 'End') next = ids[ids.length - 1];
+    if (next) { e.preventDefault(); currentTab = next; renderCase(); const el = $(`#tab-${next}`); if (el) el.focus(); }
+  }));
   bindCaseEvents(c);
 }
 function showCaseError(msg) {
@@ -462,20 +491,35 @@ function haggleSummary(c) {
       Target <b>${money(i.targetPrice)}</b> · Max <b>${money(i.maxApprovedPrice)}</b> · Walk away &gt; <b>${money(i.maxApprovedPrice)}</b></div>
   </section>`;
 }
+// Blind-test completeness: the tally, the sample→version mapping and
+// the leader stay hidden until every reader has rated every sample.
+// QA 2026-11-06: with 4 of 9 ratings in, the UI already named the
+// leader and labelled every sample with its version — the blind was
+// never actually blind. The server already withholds its tally until
+// complete; the client must do the same.
+function courtTallyState(c) {
+  const expected = (c.readers || []).length * (c.samples || []).length;
+  const submitted = (c.ratings || []).length;
+  return { expected, submitted, complete: expected > 0 && submitted >= expected };
+}
 function courtSummary(c) {
   const conflicts = (c.conflicts || []).filter((x) => x.conflict).length;
   const cs = courtScoresFor(c);
+  const ts = courtTallyState(c);
   const tally = courtMeans(c);
   const leader = Object.entries(tally).sort((a, b) => b[1].overall - a[1].overall)[0];
+  const leaderRow = ts.complete
+    ? `<dt>Leading by blind mean</dt><dd>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</dd>`
+    : `<dt>Tally</dt><dd>Hidden — ${ts.submitted} of ${ts.expected} ratings in</dd>`;
   return `<section class="panel" aria-labelledby="court-sum-h">
     <h2 id="court-sum-h">Recipe court — summary</h2>
     <dl class="kv">
       <dt>Versions</dt><dd>${c.versions.length}</dd>
       <dt>Conflicting variables</dt><dd>${conflicts} of ${c.conflicts.length}</dd>
       <dt>Blind readers</dt><dd>${cs.readers.length}</dd>
-      <dt>Leading by blind mean</dt><dd>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</dd>
+      ${leaderRow}
     </dl>
-    <p class="small muted" style="margin-top:10px">Coded samples, independent ratings (1–5). Scores revealed only after every reader submitted. The dissenting version is preserved, never deleted.</p>
+    <p class="small muted" style="margin-top:10px">Coded samples, independent ratings (1–5). Scores are shown as submitted; the tally, the version mapping and the leader stay hidden until every reader has submitted. The dissenting version is preserved, never deleted.</p>
     <h3>Versions</h3>
     <p class="small">${c.versions.map((v) => `<span class="num">${esc(v.id)}</span> ${esc(v.author)}`).join('<br>')}</p>
   </section>`;
@@ -521,7 +565,7 @@ function overviewTab(c) {
     const a = c.analysis;
     parts.push(`<section class="panel"><h2>What happened</h2>
       <p>${esc(c.input.supplier)} raised ${esc(c.input.ingredient)} from ${money(c.input.oldPrice)} to ${money(c.input.newPrice)} per ${esc(c.input.unit)} — ${a.pctChange}% — adding ${money(a.costDiffPerServing)} per ${esc(c.input.recipe)} serving, ${money(a.monthlyExtraCost)} a month at ${c.input.monthlySales} servings.</p>
-      <p class="small muted" style="margin-top:8px">The Negotiation Agent priced ${c.strategies.length} strategies against the owner mandate; the Financial Analyst verified the maths against evidence <span class="tag-ev">[E1]</span> and <span class="tag-ev">[E2]</span>. ${c.pendingApproval ? `A counter-offer is awaiting your approval: <strong>${esc(c.pendingApproval.terms)}</strong>.` : ''}</p></section>`);
+      <p class="small muted" style="margin-top:8px">The Negotiation Agent priced ${c.strategies.length} strategies against the owner mandate; the Financial Analyst verified the maths against evidence <span class="tag-ev">[E1]</span> and <span class="tag-ev">[E2]</span>. ${c.pendingApproval ? `A counter-offer is awaiting your approval: <strong>${esc(c.pendingApproval.terms)}</strong>.` : (c.approval ? `Approved: <strong>${esc(c.approval.terms)}</strong> — ${esc(c.approval.approvedBy)}.` : '')}</p></section>`);
   }
   if (c.workflow === 'COURT') {
     parts.push(`<section class="panel"><h2>What happened</h2>
@@ -532,8 +576,8 @@ function overviewTab(c) {
     parts.push(`<section class="panel"><h2>What happened</h2>
       <p>The Verification Agent extracted ${claims.length} factual claims from the episode transcript. The guest corrects timestamped claims with evidence in the Switch room; the host approves the errata before publication.</p></section>`);
   }
-  parts.push(`<section class="panel"><h2>Participants</h2>
-    <p class="small">${(c.participants || []).map((p) => `${esc(p.name)} — ${esc(p.role)}${p.kind === 'agent' ? ' · <span style="color:var(--teal-dark);font-weight:600">AGENT</span>' : ''}${p.simulated ? ' · simulated' : ''}`).join('<br>')}</p></section>`);
+  // Participants live in the right rail (railPanels) — the overview tab
+  // used to render them a second time (QA 2026-11-06).
   return parts.join('');
 }
 function analysisTab(c) {
@@ -556,7 +600,26 @@ function analysisTab(c) {
   }
   if (c.workflow === 'COURT') return courtMatrix(c) + courtHeat(c);
   const claims = (c.claims || []).map((cl) => getClaim(c, cl));
-  return claimsTable(c, claims, false);
+  // The original transcript, sentence by sentence, with the
+  // factual/opinion classification shown — QA 2026-11-06: the text
+  // itself was never displayed, so the separation could not be seen.
+  // Claim ids follow the extractor: C{n} where n is the 1-based
+  // sentence index (the opinion sentence keeps its number but is not
+  // a claim).
+  const sentences = String(c.transcript || '').split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+  const transcriptRows = sentences.map((s, i) => {
+    const isOpinion = /^(i think|i feel|in my opinion|i believe)/i.test(s);
+    const claim = claims.find((cl) => cl.id === `C${i + 1}`);
+    const tag = isOpinion
+      ? '<span class="pill pill-grey">opinion — separated, not a claim</span>'
+      : claim ? `<span class="pill pill-teal">factual claim ${esc(claim.id)}</span>`
+      : '<span class="pill pill-grey">not a claim</span>';
+    return `<li>${esc(s)} ${tag}</li>`;
+  }).join('');
+  const transcriptPanel = `<section class="panel" aria-labelledby="transcript-h"><h2 id="transcript-h">Original transcript — preserved</h2>
+    <p class="small muted" style="margin-bottom:8px">The guest's words are kept verbatim. Factual assertions become claims below; opinions are separated out and never treated as facts.</p>
+    <ol class="transcript-list">${transcriptRows}</ol></section>`;
+  return transcriptPanel + claimsTable(c, claims, false);
 }
 function courtMatrix(c) {
   return `<section class="panel" aria-labelledby="mx-h"><h2 id="mx-h">Comparison matrix — versions of one dish</h2>
@@ -574,6 +637,7 @@ function courtMatrix(c) {
 function courtHeat(c) {
   const sample = courtSample;
   const cs = courtScoresFor(c);
+  const ts = courtTallyState(c);
   const means = courtMeans(c)[sample];
   const rows = cs.criteria.map((crit) => {
     const vals = cs.readers.map((r) => cs.scores[sample][r][crit]);
@@ -584,19 +648,34 @@ function courtHeat(c) {
       <td class="num">${means[crit].toFixed(2)}</td><td class="num">${range}</td></tr>`;
   }).join('');
   const leader = Object.entries(courtMeans(c)).sort((a, b) => b[1].overall - a[1].overall)[0];
+  // The sample→version mapping is blind information: show codes only
+  // until the tally is complete (QA 2026-11-06).
+  const sampleLabel = (code) => ts.complete ? `${code} — ${esc(cs.samples[code])}` : code;
+  const tallyBlock = ts.complete
+    ? `<h3>Canonical recipe — tally</h3>
+    <p class="small">Leading by blind mean (overall): <strong>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</strong>.
+    ${Object.entries(courtMeans(c)).map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ')}.</p>
+    <p class="small muted" style="margin-top:6px">Dissent preserved: the other two versions stay on the record as footnotes to the canonical recipe — never deleted.</p>`
+    : `<h3>Canonical recipe — tally</h3>
+    <p class="small"><strong>Tally hidden — ${ts.submitted} of ${ts.expected} ratings submitted.</strong> The version mapping and the leader stay hidden until every reader has rated every sample; the tally appears here then.</p>`;
   return `<section class="panel" aria-labelledby="blind-h"><h2 id="blind-h">Blind scores — heat table (1–5)</h2>
     <p class="small muted" style="margin-bottom:10px">Blind scores held by the server — ${(c.ratings || []).length} ratings from ${cs.readers.length} readers on record. Rows where readers differ by ≥2 are highlighted. The version mapping is revealed in the tally, after all readers submitted.</p>
     <div class="sample-switch" role="group" aria-label="Choose a coded sample">
-      ${Object.entries(cs.samples).map(([code, name]) => `<button class="ghost-btn btn-sm ${courtSample === code ? 'is-active' : ''}" data-sample="${code}" aria-pressed="${courtSample === code}">${code} — ${esc(name)}</button>`).join('')}
+      ${Object.entries(cs.samples).map(([code, name]) => `<button class="ghost-btn btn-sm ${courtSample === code ? 'is-active' : ''}" data-sample="${code}" aria-pressed="${courtSample === code}">${sampleLabel(code)}</button>`).join('')}
     </div>
     <div class="table-wrap"><table>
-      <caption>Coded sample ${sample} (${esc(cs.samples[sample])}) — scores by reader.</caption>
+      <caption>Coded sample ${sample}${ts.complete ? ` (${esc(cs.samples[sample])})` : ''} — scores by reader.</caption>
       <thead><tr><th scope="col">Criterion</th>${cs.readers.map((r) => `<th scope="col" class="num">${esc(r)}</th>`).join('')}<th scope="col" class="num">Mean</th><th scope="col" class="num">Range</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-    <h3>Canonical recipe — tally</h3>
-    <p class="small">Leading by blind mean (overall): <strong>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</strong>.
-    ${Object.entries(courtMeans(c)).map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ')}.</p>
-    <p class="small muted" style="margin-top:6px">Dissent preserved: the other two versions stay on the record as footnotes to the canonical recipe — never deleted.</p>
+    ${tallyBlock}
+    <h3>Submit a blind rating</h3>
+    <form class="rating-form" id="rating-form">
+      <label>Reader <select id="rating-reader" required>${(c.readers || []).map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select></label>
+      <label>Sample <select id="rating-sample" required>${(c.samples || []).map((s) => `<option value="${esc(s.code)}">${esc(s.code)}</option>`).join('')}</select></label>
+      ${cs.criteria.map((crit) => `<label>${esc(crit)} <input type="number" min="1" max="5" step="1" required data-crit="${esc(crit)}" aria-label="${esc(crit)} score 1 to 5"></label>`).join('')}
+      <button class="btn btn-sm" type="submit">Submit rating</button>
+    </form>
+    <p class="small muted" id="rating-note">Ratings are server-held and cannot be changed once submitted — a duplicate is rejected (409). Samples are codes only, so the rating stays blind.</p>
   </section>`;
 }
 function claimsTable(c, claims, interactive) {
@@ -651,11 +730,20 @@ function haggleNegotiation(c) {
     <div class="table-wrap"><table>
       <caption>Strategies priced by the deterministic engine. Selecting a row updates the impact panel and the approval button.</caption>
       <thead><tr><th scope="col">Option</th><th scope="col" class="num">Price</th><th scope="col" class="num">Food cost</th><th scope="col" class="num">Monthly impact</th><th scope="col">Status</th></tr></thead>
-      <tbody>${(c.strategies || []).map((s) => `<tr class="clickable ${s.id === selectedStrategy ? 'sel' : ''}" data-strategy="${esc(s.id)}" tabindex="0">
+      <tbody>${(c.strategies || []).map((s) => {
+        // Status is derived from the case state, not hardcoded per
+        // strategy: after approval the chosen row must read Approved,
+        // not "Awaiting" (QA 2026-11-06).
+        const approvedHere = c.approval && PROPOSAL_TO_STRATEGY[c.approval.proposalId] === s.id;
+        const awaitingHere = c.pendingApproval && PROPOSAL_TO_STRATEGY[c.pendingApproval.proposalId] === s.id;
+        const statusPill = approvedHere ? '<span class="pill pill-teal">Approved</span>'
+          : awaitingHere ? '<span class="pill pill-amber">Awaiting</span>'
+          : '<span class="pill pill-grey">Proposed</span>';
+        return `<tr class="clickable ${s.id === selectedStrategy ? 'sel' : ''}" data-strategy="${esc(s.id)}" tabindex="0">
         <td><strong>${esc(s.name)}</strong><br><span class="muted small">${esc(s.detail)}</span>${s.unverified ? '<br><span class="pill pill-amber">Unverified quote</span>' : ''}${s.risk ? `<br><span class="small" style="color:var(--red)">${esc(s.risk)}</span>` : ''}</td>
         <td class="num">${money(s.unitPrice)}</td><td class="num">${pct(s.foodCostPct)}</td>
         <td class="num">${s.extraVsOldPerMonth >= 0 ? '+' : ''}${money(s.extraVsOldPerMonth)}</td>
-        <td>${s.id === 'counter-019' ? '<span class="pill pill-amber">Awaiting</span>' : '<span class="pill pill-grey">Proposed</span>'}</td></tr>`).join('')}</tbody></table></div>
+        <td>${statusPill}</td></tr>`; }).join('')}</tbody></table></div>
     <div id="impact-panel">${impactPanel(c, sel)}</div>
   </section>`;
 }
@@ -682,7 +770,7 @@ function approvalControls(c, s, terms) {
       “I approve ${esc(c.approval.terms)}.” — <b>${esc(c.approval.approvedBy)}</b>, ${fmtDateTime(c.approval.approvedAt)}</div>`;
   }
   if (c.state === 'AWAITING_APPROVAL' || c.state === 'PROPOSAL' || c.state === 'DISCUSSION') {
-    return `<button class="btn" id="approve-btn" data-strategy="${esc(s.id)}">Approve ${esc(terms.short)}</button>
+    return `<button class="btn" id="approve-btn">Approve ${esc(terms.short)}</button>
       <button class="ghost-btn" id="reject-btn">Reject pending terms</button>
       <p class="small muted">Two-step: this opens a confirmation restating the exact terms. Only a human (Mara, owner) may approve.</p>`;
   }
@@ -726,12 +814,29 @@ function railPanels(c) {
 
 // ---------- case events ----------
 function bindCaseEvents(c) {
-  $$('[data-strategy]', $('#view')).forEach((row) => {
-    const pick = () => { selectedStrategy = row.dataset.strategy; renderCase(); const el = $(`[data-strategy="${selectedStrategy}"]`); if (el) el.classList.add('flash'); };
+  // N1 (QA 2026-11-06 re-run): this binding used to match
+  // [data-strategy] anywhere — including #approve-btn, which carried
+  // data-strategy too. Enter/Space on the button was swallowed by the
+  // row handler (pick() re-rendered first), so keyboard users could
+  // never open the approval modal. Scope it to the strategy rows only.
+  $$('tr[data-strategy]', $('#view')).forEach((row) => {
+    const pick = () => { selectedStrategy = row.dataset.strategy; renderCase(); const el = $(`tr[data-strategy="${selectedStrategy}"]`); if (el) { el.classList.add('flash'); el.focus(); } };
     row.addEventListener('click', pick);
     row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
   });
   $$('[data-sample]', $('#view')).forEach((b) => b.addEventListener('click', () => { courtSample = b.dataset.sample; renderCase(); }));
+  const rf = $('#rating-form');
+  if (rf) rf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const note = $('#rating-note');
+    const scores = {};
+    $$('#rating-form input[data-crit]').forEach((inp) => { scores[inp.dataset.crit] = Number(inp.value); });
+    try {
+      const res = await api('/api/court/rate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, reader: $('#rating-reader').value, sample: $('#rating-sample').value, scores }) });
+      note.textContent = res.tally ? 'Rating saved — the tally is complete and is shown above.' : `Rating saved — ${res.count} of ${res.expected} ratings in. The tally stays hidden until all are submitted.`;
+      await reloadCase(c); renderCase();
+    } catch (err) { note.textContent = `Could not save the rating: ${err.message}`; }
+  });
   const ab = $('#approve-btn');
   if (ab) ab.addEventListener('click', () => openApproveModal(c));
   const rb = $('#reject-btn');
@@ -781,8 +886,36 @@ function showChallengeForm(c, claimId) {
   $('#challenge-text').focus();
 }
 
+// ---------- focus management (QA 2026-11-06) ----------
+// Dialogs return focus to the element that opened them and keep Tab
+// inside while open; without this, keyboard users lose their place
+// (the drawer used to return focus to <body> on close).
+let lastFocusBeforeDialog = null;
+function focusables(container) {
+  return [...container.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter((el) => !el.disabled && el.offsetParent !== null);
+}
+function trapTab(container, e) {
+  if (e.key !== 'Tab') return;
+  const els = focusables(container);
+  if (!els.length) return;
+  const first = els[0], last = els[els.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+function rememberFocus() { lastFocusBeforeDialog = document.activeElement; }
+function restoreFocus() {
+  if (lastFocusBeforeDialog && document.contains(lastFocusBeforeDialog)) lastFocusBeforeDialog.focus();
+  lastFocusBeforeDialog = null;
+}
+
 // ---------- approval modal ----------
+function closeModal() {
+  $('#modal-backdrop').hidden = true;
+  restoreFocus();
+}
 function openApproveModal(c) {
+  rememberFocus();
   const s = (c.strategies || []).find((x) => x.id === selectedStrategy) || c.strategies[0];
   const terms = STRATEGY_TERMS[s.id] || { short: money(s.unitPrice) + ' / fl oz', full: money(s.unitPrice) + '/fl oz' };
   $('#modal-terms').textContent = `I approve ${terms.full}. — Mara (owner), case ${c.id}`;
@@ -806,7 +939,7 @@ function openApproveModal(c) {
         await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'AWAITING_APPROVAL', actor: 'Mara (owner)', actorKind: 'human', proposalId: s.id, terms: terms.full }) });
       }
       await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'APPROVED', actor: 'Mara (owner)', actorKind: 'human' }) });
-      $('#modal-backdrop').hidden = true;
+      closeModal();
       details[c.id] = await api(`/api/cases/${c.id}`);
       cases = await api('/api/cases');
       currentTab = 'audit';
@@ -816,11 +949,13 @@ function openApproveModal(c) {
     } finally { btn.disabled = false; }
   };
 }
-$('#modal-cancel').addEventListener('click', () => { $('#modal-backdrop').hidden = true; });
-$('#modal-backdrop').addEventListener('click', (e) => { if (e.target === $('#modal-backdrop')) $('#modal-backdrop').hidden = true; });
+$('#modal-cancel').addEventListener('click', closeModal);
+$('#modal-backdrop').addEventListener('click', (e) => { if (e.target === $('#modal-backdrop')) closeModal(); });
+$('#modal-backdrop').addEventListener('keydown', (e) => trapTab($('#modal-backdrop'), e));
 
 // ---------- room drawer ----------
 function openRoom(caseId) {
+  rememberFocus();
   roomCaseId = caseId;
   renderRoom();
   $('#room-drawer').hidden = false;
@@ -828,10 +963,13 @@ function openRoom(caseId) {
   $('#room-text').focus();
 }
 function closeRoom() {
+  if ($('#room-drawer').hidden) return;
   $('#room-drawer').hidden = true;
   $('#drawer-backdrop').hidden = true;
   roomCaseId = null;
+  restoreFocus();
 }
+$('#room-drawer').addEventListener('keydown', (e) => trapTab($('#room-drawer'), e));
 function renderRoom() {
   const c = details[roomCaseId]; if (!c) return;
   $('#drawer-title').textContent = `Room ${c.switchRoom}`;
@@ -844,7 +982,7 @@ function renderRoom() {
   const msgs = c.messages || [];
   $('#room-log').innerHTML = msgs.length
     ? msgs.map((msg) => `<div class="room-msg"><div class="rm-head"><b>${esc(msg.author)}</b> · ${fmtTime(msg.at)} ${/agent/i.test(msg.author) ? '<span class="agent-tag">AGENT</span>' : ''}</div>${esc(msg.text)}</div>`).join('')
-    : '<p class="empty">No messages yet in this room. Post below — ' + (statusData?.switchMode === 'REAL-SWITCH' ? 'it goes to the live Switch room (real Mattermost channel) and is logged in the audit trail.' : 'it goes to the SIMULATED stub transcript and is logged in the audit trail.') + '</p>';
+    : '<p class="empty">No messages yet in this room. Post below — ' + (statusData?.switchMode === 'REAL-SWITCH' ? 'it goes to the live Switch room (real Mattermost channel) and is logged in the audit trail.' : statusData?.switchMode === 'SWITCH-UNREACHABLE' ? 'the Switch server is currently unreachable, so the message will not be delivered. Check the server and retry.' : 'it goes to the SIMULATED stub transcript and is logged in the audit trail.') + '</p>';
 }
 $('#drawer-close').addEventListener('click', closeRoom);
 $('#drawer-backdrop').addEventListener('click', closeRoom);
@@ -872,7 +1010,7 @@ $('#search').addEventListener('keydown', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#search').focus(); }
-  if (e.key === 'Escape') { closeRoom(); $('#modal-backdrop').hidden = true; }
+  if (e.key === 'Escape') { closeRoom(); if (!$('#modal-backdrop').hidden) closeModal(); }
 });
 
 (async function boot() {

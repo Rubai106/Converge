@@ -40,6 +40,12 @@ export function transitionCase(c, to, actor) {
   const from = c.state;
   c.state = to;
   if (to === 'APPROVED') c.approval = { ...c.pendingApproval, approvedBy: actor.name, approvedAt: new Date().toISOString() };
+  // A pending approval is resolved by the decision: once a case is
+  // APPROVED (or the terms are REJECTED) nothing is pending any more.
+  // Leaving it set made the Decisions view, the case overview and the
+  // Approvals panel all claim a decision was still awaited on a case
+  // that was already decided (QA 2026-11-06).
+  if (to === 'APPROVED' || to === 'REJECTED') c.pendingApproval = null;
   audit(c, actor, `state:${from}->${to}`);
   return c;
 }
@@ -57,14 +63,31 @@ const round4 = (n) => Math.round(n * 10000) / 10000;
 // Inputs: supplier, ingredient, old/new unit price, unit, qtyPerServing,
 // otherIngredientsCostPerServing, menuPrice, monthlySales (servings/month),
 // targetFoodCostPct (e.g. 30), targetPrice, maxApprovedPrice.
-export function haggleAnalysis(input) {
+// All HAGGLE money inputs must be finite numbers. Numeric strings are
+// coerced (JSON data sometimes carries them); Infinity, NaN, missing
+// fields and non-numeric strings are rejected — never let them leak
+// NaN/Infinity into financial output (QA 2026-11-06, BUG-1/BUG-2).
+// Both haggleAnalysis and haggleStrategies normalise through here so
+// the two can never disagree about what counts as valid input.
+const HAGGLE_NUMERIC = ['oldPrice', 'newPrice', 'qtyPerServing', 'otherIngredientsCostPerServing', 'menuPrice', 'monthlySales', 'targetFoodCostPct'];
+export function normalizeHaggleInputs(raw) {
+  const input = { ...raw };
+  for (const k of HAGGLE_NUMERIC) {
+    const v = Number(raw[k]);
+    if (!Number.isFinite(v)) throw new Error(`Invalid HAGGLE inputs: ${k} must be a finite number.`);
+    input[k] = v;
+  }
+  if (!(input.oldPrice >= 0 && input.newPrice >= 0 && input.qtyPerServing > 0 && input.menuPrice > 0 && input.monthlySales >= 0 && input.otherIngredientsCostPerServing >= 0 && input.targetFoodCostPct > 0)) {
+    throw new Error('Invalid HAGGLE inputs: prices, quantity, menu price and sales must be valid numbers.');
+  }
+  return input;
+}
+export function haggleAnalysis(rawInput) {
+  const input = normalizeHaggleInputs(rawInput);
   const {
     oldPrice, newPrice, qtyPerServing, otherIngredientsCostPerServing,
     menuPrice, monthlySales, targetFoodCostPct,
   } = input;
-  if (!(oldPrice >= 0 && newPrice >= 0 && qtyPerServing > 0 && menuPrice > 0 && monthlySales >= 0)) {
-    throw new Error('Invalid HAGGLE inputs: prices, quantity, menu price and sales must be valid numbers.');
-  }
   const oldCream = round4(oldPrice * qtyPerServing);
   const newCream = round4(newPrice * qtyPerServing);
   const diffPerServing = round4(newCream - oldCream);
@@ -96,7 +119,8 @@ export function haggleAnalysis(input) {
   };
 }
 
-export function haggleStrategies(analysis, input) {
+export function haggleStrategies(analysis, rawInput) {
+  const input = normalizeHaggleInputs(rawInput);
   const { monthlySales, menuPrice } = input;
   const atPrice = (unitPrice) => {
     const cream = round4(unitPrice * input.qtyPerServing);

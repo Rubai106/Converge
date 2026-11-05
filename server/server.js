@@ -80,7 +80,13 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/status' && req.method === 'GET') {
       let switchHealth = stubHealth();
       if (SWITCH_BASE_URL) { try { switchHealth = await probeHealth(SWITCH_BASE_URL); } catch (e) { switchHealth = { ok: false, error: String(e) }; } }
-      return send(res, 200, { switchMode: SWITCH_MODE, switchVersion: SWITCH_VERSION, switchHealth, cases: data.cases.length });
+      // BUG-3 (QA 2026-11-06): the reported mode is health-derived, not
+      // config-derived. A configured-but-dead server used to report
+      // REAL-SWITCH while switchHealth.ok was false, so the UI pill,
+      // drawer and footer all claimed the integration was live when it
+      // was not. Now the mode says UNREACHABLE until the probe succeeds.
+      const effectiveMode = !SWITCH_BASE_URL ? 'SIMULATED-STUB' : (switchHealth.ok ? 'REAL-SWITCH' : 'SWITCH-UNREACHABLE');
+      return send(res, 200, { switchMode: effectiveMode, switchConfigured: Boolean(SWITCH_BASE_URL), switchVersion: SWITCH_VERSION, switchHealth, cases: data.cases.length });
     }
     const caseMatch = url.pathname.match(/^\/api\/cases\/([\w-]+)$/);
     if (caseMatch && req.method === 'GET') {
@@ -164,8 +170,17 @@ const server = createServer(async (req, res) => {
         c.claimStatuses[base.id] = claim.status;
         if (body.challenge) {
           c.claimChallenges = c.claimChallenges || {};
+          // A re-challenge used to overwrite the previous one, losing
+          // the original text (QA 2026-11-06 observation). Keep the
+          // history; the newest challenge stays the current one.
+          const prev = c.claimChallenges[base.id];
+          if (prev) {
+            c.claimChallengeHistory = c.claimChallengeHistory || {};
+            (c.claimChallengeHistory[base.id] = c.claimChallengeHistory[base.id] || []).push(prev);
+          }
           c.claimChallenges[base.id] = { text: body.challenge.text || '', evidence: body.challenge.evidence || null, by: body.actor || 'Guest' };
           claim.guestChallenge = c.claimChallenges[base.id];
+          if (c.claimChallengeHistory?.[base.id]?.length) claim.challengeHistory = c.claimChallengeHistory[base.id];
         }
         audit(c, { name: body.actor || 'Host', kind: body.actorKind || 'human' }, 'claim-status', { claim: base.id, status: claim.status });
         save(data);
@@ -189,20 +204,30 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const c = getCase(data, body.caseId);
       if (!c) return send(res, 404, { error: 'case not found' });
+      // BUG-5 (QA 2026-11-06): empty and 100k-char messages used to be
+      // accepted, stored and audited. The drawer already blocks empty
+      // input client-side; the API enforces it too (4000 chars is
+      // Mattermost's default max post length).
+      const text = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!text) return send(res, 400, { error: 'Message text is required.' });
+      if (text.length > 4000) return send(res, 400, { error: 'Message is too long (max 4000 characters).' });
+      body.text = text;
       if (realSwitch) {
         const roomId = await ensureRealRoom(c);
         const result = await withRoomConnection(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, roomId, async (connectionId) => {
           return callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'post_message', { body: body.text }, connectionId);
         });
         const eventId = result.result?.event_id || null;
-        const msg = { id: eventId || `real-${Date.now()}`, author: body.author || 'Mara (owner)', kind: 'human', text: body.text, at: new Date().toISOString(), room: c.switchRoom, roomId, eventId, real: true };
+        const author = body.author || 'Mara (owner)';
+        const kind = /agent/i.test(author) ? 'agent' : 'human';
+        const msg = { id: eventId || `real-${Date.now()}`, author, kind, text: body.text, at: new Date().toISOString(), room: c.switchRoom, roomId, eventId, real: true };
         c.messages.push(msg);
-        audit(c, { name: body.author || 'Mara (owner)', kind: 'human' }, 'room-message', { room: c.switchRoom, roomId, eventId });
+        audit(c, { name: author, kind }, 'room-message', { room: c.switchRoom, roomId, eventId });
         save(data);
         return send(res, 200, msg);
       }
       const msg = stubCallOp(stub, 'post_message', body);
-      if (c) { c.messages.push(msg); audit(c, { name: body.author || 'agent', kind: 'agent' }, 'room-message', { room: body.room }); save(data); }
+      if (c) { c.messages.push(msg); audit(c, { name: body.author || 'agent', kind: /agent/i.test(body.author || '') ? 'agent' : 'human' }, 'room-message', { room: body.room }); save(data); }
       return send(res, 200, { ...msg, simulated: true, caption: 'SIMULATED — stub server, not Switch' });
     }
     if (url.pathname === '/api/switch/register' && req.method === 'POST') {

@@ -112,6 +112,15 @@ export function load() {
       if (c[k] === undefined) { c[k] = v; changed = true; }
     }
   }
+  // QA 2026-11-06: cases recorded as APPROVED/COMPLETED/REJECTED could
+  // still carry a stale pendingApproval (the engine used to leave it
+  // set). A decided case has nothing pending; clear it. The approval
+  // record and the audit trail are untouched.
+  for (const c of d.cases) {
+    if (['APPROVED', 'COMPLETED', 'REJECTED'].includes(c.state) && c.pendingApproval) {
+      c.pendingApproval = null; changed = true;
+    }
+  }
   if (changed) writeFileSync(file, JSON.stringify(d, null, 2));
   return d;
 }

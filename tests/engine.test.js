@@ -47,6 +47,20 @@ test('Approval gate: agent cannot approve, human can only with pending approval'
   assert.equal(ok.approval.approvedBy, 'Mara');
 });
 
+// QA 2026-11-06 (H1): approving a case must clear the pending approval,
+// otherwise a COMPLETED case still shows "awaiting your approval" in the
+// Decisions view, the case overview and the rail panel at the same time.
+test('Approving or rejecting a case clears its pending approval', () => {
+  const approved = { state: 'AWAITING_APPROVAL', pendingApproval: { proposalId: 'P2', terms: '$0.19' }, audit: [] };
+  transitionCase(approved, 'APPROVED', { name: 'Mara', kind: 'human' });
+  assert.equal(approved.pendingApproval, null);
+  assert.ok(approved.approval, 'approval record is kept');
+
+  const rejected = { state: 'AWAITING_APPROVAL', pendingApproval: { proposalId: 'P2', terms: '$0.19' }, audit: [] };
+  transitionCase(rejected, 'REJECTED', { name: 'Mara', kind: 'human' });
+  assert.equal(rejected.pendingApproval, null);
+});
+
 test('COURT conflict detection finds salt/fat/simmer conflicts, not tomato', () => {
   const versions = [
     { id: 'card', author: 'Nonna', ingredients: { salt: 'a pinch', fat: 'lard', simmer: '3 hours', tomato: 'San Marzano' } },

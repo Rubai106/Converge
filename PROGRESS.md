@@ -145,3 +145,21 @@ REAL-SWITCH LIVE: switch-core 0.31.0 + Mattermost 11.9.0 running on this machine
 - **Health re-verified after all restarts:** /health 200 {"status":"ok"}, /health/ready all healthy incl. bridges; app REAL-SWITCH, /api/switch/rooms lists all 3 real rooms; HAGGLE room read back from Mattermost (8 posts, full arc intact).
 - **Tests 20/20** (12 existing + 8 Switch-client incl. the new beat test). `npm run check` clean.
 - **Label fix verified:** room drawer + footer are mode-aware — the drawer now shows the teal LIVE banner in REAL-SWITCH mode (re-captured screenshots confirm). Fresh live screenshots (7) + demo video (147.8s webm) captured from the live app.
+
+## 2026-11-06 ~00:21 Dhaka — fourth sync (c4305f5)
+- Snapshot push c4305f5 on top of ac9caef (history preserved). 37 files,
+  incl. the corrected protocol docs, loopback security section,
+  re-verification evidence, live screenshots README + demo script
+  (video file itself is binary and stays local — see screenshots README).
+  Verified via public API (commit list) and by reading
+  docs/switch-live-integration.md back from GitHub at the new head
+  (loopback + beat sections present). Sync record now has 4 entries.
+
+## 2026-11-06 ~00:30–01:10 Dhaka — full product QA, visual audit + screenshot delivery (Rubai's brief §1–15)
+- **Verdict: PASS with minor limitations — ready for the final demo.** Full report: `submission/qa/QA-REPORT.md`.
+- **Suite 26/26 pass, 0 fail, 0 skipped** (21 + 5 ported engine-edge regression tests). `npm run check` clean. API pass: 59 calls, 47 asserted PASS, 0 FAIL. Axe-core: **0 violations on 13 pages** after fixes (baseline was 4–14 contrast nodes/page + 1 label mismatch).
+- **Bugs found and fixed (all re-verified live):** H1 stale `pendingApproval` (engine clears on APPROVED/REJECTED + store migration; production HAG-014 now COMPLETED with `pendingApproval: null`, approval + 3 audit events intact); H2 COURT tally not blind in the UI (client-side gating, codes-only samples); H3/H4 contrast (`--faint` 5.46:1, stamp 6.27:1); H5 drawer/modal focus trap + return; H6 rows keyboard-operable; M1 stepper (6 steps); M2 transcript panel; M3 blind rating form; M4 duplicate Participants; M5 amber pills incl. `.switch-pill` (6.26:1); M6 tabs ARIA + arrow keys; M7 drawer-close label; M8 skip link; strategy pill derived from state; room-message audit kind; BUG-1/2 engine validation (finite numbers only, strings coerced, no NaN/Infinity); BUG-3 false-live → `SWITCH-UNREACHABLE` (verified against dead server); BUG-4 stub auto-creates rooms; BUG-5 empty/overlong messages rejected (400); challenge history preserved; **N1 (found in a11y re-run): `#approve-btn` was bound as a strategy row, so keyboard users could not open the approval modal — binding scoped to `tr[data-strategy]`, attribute removed from the button, verified live (Enter/Space/click open, Escape returns focus).**
+- **Switch re-verified:** /health ok, /health/ready 7/7 healthy, 53 ops, HAGGLE room 10 threads incl. owner approval + INGEST2 marker, bridge listening since 00:16, agent approval on live AWAITING_APPROVAL case → 400. Restart/reconnect behaviour NOT re-run live (risks the bridge; earlier verification stands).
+- **Screenshots: 48 files** in `submission/qa/screenshots/` (42 numbered + 37b + 5 mobile) + 14 responsive captures; ZIP `submission/qa/converge-qa-screenshots.zip` (6.3 MB, integrity-checked). 20 re-captured post-fix (incl. hidden-tally, transcript panel, members panel, REAL-SWITCH status clip). **PNGs/ZIP are NOT on GitHub** (binary upload blocked from this VM) — delivered as conversation attachments.
+- **Remaining limitations (honest):** COURT API payload still carries the sample mapping (true blindness needs server-side withholding); drawer shows only app-stored messages; agents may REJECT / set claims Unresolved by design; `POST /api/court/tally` open compute endpoint; no server-side search; no real usability sessions yet.
+- **QA tooling added:** `scripts/qa-capture.py`, `scripts/qa-capture-2.py` (Playwright capture), `scripts/qa-seed.mjs` (QA data seeding — refuses the production data file). QA instance `~/workspace/converge-qa/` (disposable). Findings in `~/workspace/converge-qa-findings/` (`a11y.md`, `a11y-rerun.md`, `api-tests.md`, `recapture.md`).

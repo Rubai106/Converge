@@ -1,0 +1,42 @@
+shot: 39-mattermost-agent.png
+shot: 40-agent-message.png
+shot: 41-human-response.png
+shot: 42-haggle-discussion.png (full page)
+shot: mobile-01-dashboard.png
+    ok no h-overflow: mobile dashboard
+shot: mobile-02-haggle.png
+    ok no h-overflow: mobile haggle
+shot: mobile-03-room.png
+    ok no h-overflow: mobile room
+shot: mobile-04-court.png
+    ok no h-overflow: mobile court
+shot: mobile-05-correction.png
+    ok no h-overflow: mobile correction
+shot: responsive dashboard-1920x1080.png
+  ok no h-overflow: dashboard 1920x1080
+shot: responsive haggle-1920x1080.png
+  ok no h-overflow: haggle 1920x1080
+shot: responsive dashboard-1366x768.png
+  ok no h-overflow: dashboard 1366x768
+shot: responsive haggle-1366x768.png
+  ok no h-overflow: haggle 1366x768
+shot: responsive dashboard-1280x800.png
+  ok no h-overflow: dashboard 1280x800
+shot: responsive haggle-1280x800.png
+  ok no h-overflow: haggle 1280x800
+shot: responsive dashboard-1024x768.png
+  ok no h-overflow: dashboard 1024x768
+shot: responsive haggle-1024x768.png
+  ok no h-overflow: haggle 1024x768
+shot: responsive dashboard-768x1024.png
+  ok no h-overflow: dashboard 768x1024
+shot: responsive haggle-768x1024.png
+  ok no h-overflow: haggle 768x1024
+shot: responsive dashboard-430x932.png
+  ok no h-overflow: dashboard 430x932
+shot: responsive haggle-430x932.png
+  ok no h-overflow: haggle 430x932
+shot: responsive dashboard-375x812.png
+  ok no h-overflow: dashboard 375x812
+shot: responsive haggle-375x812.png
+  ok no h-overflow: haggle 375x812

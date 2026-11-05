@@ -41,8 +41,15 @@ export function stubCallOp(state, opName, args = {}) {
     state.rooms.push(room); return room;
   }
   if (opName === 'post_message') {
-    const room = state.rooms.find((r) => r.id === args.roomId || r.name === args.room);
-    if (!room) { const e = new Error('Room not found'); e.status = 404; throw e; }
+    // BUG-4 (QA 2026-11-06): posting to a case's own room used to 500
+    // ("Room not found") when the room was not one of the three seeded
+    // ones. The real path creates a room on demand (ensureRealRoom);
+    // the stub mirrors that instead of failing.
+    let room = state.rooms.find((r) => r.id === args.roomId || r.name === args.room);
+    if (!room) {
+      room = { id: `room-${Date.now()}`, name: args.room || args.roomId || 'unnamed', members: [], messages: [] };
+      state.rooms.push(room);
+    }
     const msg = { at: new Date().toISOString(), author: args.author || 'agent', text: args.text || '', simulated: true };
     room.messages.push(msg); return msg;
   }
