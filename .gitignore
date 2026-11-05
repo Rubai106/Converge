@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Runtime data (seeded fictional demo cases; re-created on first run)
+data/
+
+# Secrets and environment — never commit real values
+.env
+.env.local
+*.pem
+*.key
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Switch server deployment lives outside this repo (~/workspace/switch-server)
+# and holds its own .env with real secrets — never copy it here.
+switch-server/

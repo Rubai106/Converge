@@ -1,0 +1,67 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CONVERGE — Direction C · Collaborative spatial workspace (prototype)</title>
+<style>
+:root{--canvas:#EFEAE0;--ink:#22211E;--soft:#6B675E;--line:#D5CFC2;--coral:#D9552C;--violet:#5B4CAD;--amber:#C98A1B;--teal:#0E7C6B}
+*{box-sizing:border-box}body{margin:0;background:var(--canvas);color:var(--ink);font:400 13px/1.6 Inter,system-ui,sans-serif}
+header{background:#fff;border-bottom:1px solid var(--line);padding:10px 18px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+header b{font:700 19px Sora,system-ui,sans-serif}header .who{font-size:12px;color:var(--soft)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px}
+.wrap{display:grid;grid-template-columns:200px 1fr 280px;min-height:calc(100vh - 53px)}
+.rail{background:#fff;border-right:1px solid var(--line);padding:14px}
+.rail h3,.right h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--soft);margin:14px 0 6px}
+.rail a{display:block;padding:8px;border-radius:8px;text-decoration:none;color:var(--ink)} .rail a.on{background:#F3EEE3;font-weight:600}
+.canvas{padding:18px;overflow:auto}
+.strip{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px}
+.strip b{color:var(--coral)}
+.stages{display:flex;gap:10px;align-items:stretch;overflow-x:auto;padding:6px 2px 14px}
+.stage{flex:1;min-width:170px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px;position:relative}
+.stage.cur{border:2px solid var(--coral)} .stage.done{border-color:var(--teal)}
+.stage h4{margin:0 0 4px;font:600 15px Sora,system-ui,sans-serif}.stage small{color:var(--soft);font-size:11px;text-transform:uppercase;letter-spacing:.07em}
+.stage .num{font:500 18px "IBM Plex Mono",monospace}
+.agent{background:#FFF8E6;border-left:3px solid var(--amber);border-radius:6px;padding:8px;margin-top:8px;font-size:12px}
+.rooms{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px}
+.room{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px}
+.room h4{margin:0 0 6px;font:600 15px Sora,system-ui,sans-serif}
+.msg{border-top:1px solid #EEE9DD;padding:8px 0;font-size:13px}.msg small{display:block;color:var(--soft);font-size:11px}
+.arrow{text-align:center;color:var(--violet);font-weight:700;padding:4px}
+button{font:inherit;cursor:pointer}.btn{background:var(--coral);color:#fff;border:0;border-radius:8px;padding:11px 16px;font-weight:600;width:100%}
+.btn:disabled{background:var(--teal)}.ghost{background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.right{background:#fff;border-left:1px solid var(--line);padding:14px}
+.right li{margin:6px 0;list-style:none}.right ul{padding:0}
+:focus-visible{outline:2px solid var(--coral);outline-offset:2px}
+@media(max-width:1100px){.wrap{grid-template-columns:180px 1fr}.right{display:none}}
+@media(max-width:700px){.wrap{grid-template-columns:1fr}.rail{display:none}.stages{flex-direction:column}.rooms{grid-template-columns:1fr}}
+</style></head><body>
+<header><b>CONVERGE</b><span class="who"><span class="dot" style="background:var(--teal)"></span>Owner in room · <span class="dot" style="background:#8A6D00"></span>DairyCo rep · <span class="dot" style="background:var(--amber)"></span>Negotiation Agent — investigating</span><span><button class="ghost">List view</button> <button class="ghost">Fit</button></span></header>
+<div class="wrap">
+<nav class="rail" aria-label="Rooms"><h3>HAGGLE</h3><a href="#" class="on">#haggle-dairyco ●</a><a href="#">#haggle-flour</a><h3>COURT</h3><a href="#">#recipe-ragu</a><h3>CORRECTION</h3><a href="#">#episode-osei</a><h3>Approvals</h3><p style="font-size:13px">3 rooms need a human today.</p></nav>
+<main class="canvas">
+<div class="strip"><b>What needs a human today?</b> — HAG-014: approve $0.19/fl oz for 6 weeks · CRT-007: family vote · COR-003: approve errata draft.</div>
+<h2 style="font:600 20px Sora,system-ui,sans-serif;margin:4px 0 2px">HAG-014 — DairyCo cream · the floor</h2>
+<p style="color:var(--soft);margin:0 0 10px">Walk the stages left → right. The current station is outlined in coral.</p>
+<div class="stages">
+<div class="stage done"><small>1 · Intake</small><h4>Price rise reported</h4><p>Invoice E1: cream $0.16 → $0.24/fl oz.</p></div>
+<div class="stage done"><small>2 · Investigate</small><h4>Margin checked</h4><p class="num">+$0.48 / serving<br>$998 / year</p><p>Food cost 28.6% → 31.6%</p></div>
+<div class="stage done"><small>3 · Discuss</small><h4>Options drafted</h4><p>A $0.19 · B $0.16 hold · C $17 menu</p></div>
+<div class="stage cur"><small>4 · Propose</small><h4>Counter-offer in</h4><p class="num">$0.19 / fl oz · 6 wks</p><p>Saves $48.00/mo vs $0.24.</p><div class="agent"><b>AGENT — draft</b><br>“Inside mandate (max $0.20). Recommend accept.”<br><button class="ghost" onclick="this.textContent='Accepted ✓'">Accept draft</button> <button class="ghost">Edit</button></div></div>
+<div class="stage"><small>5 · Approve</small><h4>Owner decides</h4><p>Awaiting approval. Walk-away &gt; $0.20.</p></div>
+</div>
+<div class="rooms">
+<div class="room"><h4>#strategy <span style="color:var(--soft);font-size:12px">private · owner + agents</span></h4>
+<div class="msg"><small>Owner · 13:50</small>“Target $0.16, max $0.20. Never raise the menu without asking me.”</div>
+<div class="msg"><small>Financial Analyst (agent) · 14:05</small>“At $0.19: cream $1.14/serving, food cost 29.8%. Verified vs recipe E2.”</div></div>
+<div class="room"><h4>#supplier-dairyco <span style="color:var(--soft);font-size:12px">owner + DairyCo + agent</span></h4>
+<div class="msg"><small>DairyCo rep · 14:02</small>“Best I can do is $0.19 for 6 weeks. After that we review.”</div>
+<div class="msg"><small>Negotiation Agent · 14:03</small>“Thank you — relaying $0.19 to the owner for approval. No commitment until they approve.”</div></div>
+</div>
+<div class="arrow">— violet link: agent carries approved proposals only, strategy → supplier —</div>
+<button class="btn" id="appr" onclick="approve()">Approve in the room — $0.19 / fl oz · 6 weeks</button>
+<p id="done" hidden style="color:var(--teal);font-weight:600">✓ Approved by Owner — the proposal crossed to #supplier-dairyco and was filed as a room document.</p>
+<p style="color:var(--soft);font-size:12px">Demo numbers: menu $16.00 · 6 fl oz/portion · 40 plates/week · max sustainable $0.20/fl oz. Gross ≠ net. Supplier is a labelled simulated participant in this prototype.</p>
+</main>
+<aside class="right"><h3>Participants</h3><ul><li><span class="dot" style="background:var(--teal)"></span><b>Owner</b> — approver, in room</li><li><span class="dot" style="background:#8A6D00"></span><b>DairyCo rep</b> — supplier, online</li><li><span class="dot" style="background:var(--amber)"></span><b>Negotiation Agent</b> — investigating</li><li><span class="dot" style="background:#2F5D8A"></span><b>Financial Analyst</b> — verified maths</li></ul>
+<h3>Evidence on the table</h3><ul><li>E1 Invoice — linked to Investigate</li><li>E2 Recipe — linked to Investigate</li><li>E3 Supplier message — linked to Propose</li><li>E4 Mandate — linked to Approve</li></ul><p style="color:var(--soft)">Unfiled: 0 items.</p>
+<h3>Approvals</h3><p>1 pending in this room.<br>Agent cannot approve — only the owner can.</p></aside>
+</div>
+<script>function approve(){const b=document.getElementById('appr');b.disabled=true;b.textContent='Approved ✓ — filed in #supplier-dairyco';document.getElementById('done').hidden=false;}</script>
+</body></html>

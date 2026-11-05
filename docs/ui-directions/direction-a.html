@@ -1,0 +1,78 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CONVERGE — Direction A · Evidence-first editorial (prototype)</title>
+<style>
+:root{--paper:#F7F3EB;--ink:#1B1A17;--soft:#5C574D;--rule:#D8D0BF;--red:#8C2F39;--green:#2F5D3A;--hl:#F2E3B6;--white:#fff}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:400 14px/1.65 Inter,system-ui,sans-serif}
+a{color:var(--red)}button{font:inherit;cursor:pointer}
+header{border-bottom:2px solid var(--ink);padding:14px 28px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px}
+header b{font:600 22px Fraunces,Georgia,serif;letter-spacing:.02em}header span{color:var(--soft);font-size:12px}
+nav{border-bottom:1px solid var(--rule);padding:0 28px;display:flex;gap:22px;overflow-x:auto}
+nav a{padding:10px 0;text-decoration:none;color:var(--soft);font-size:13px}nav a.on{color:var(--ink);border-bottom:2px solid var(--red);font-weight:600}
+main{max-width:1020px;margin:0 auto;padding:28px;display:grid;grid-template-columns:1fr 280px;gap:36px}
+h1{font:600 32px/1.15 Fraunces,Georgia,serif;margin:0 0 6px}h2{font:600 20px Fraunces,Georgia,serif;margin:28px 0 8px;border-top:1px solid var(--rule);padding-top:16px}
+h3{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--soft);margin:0 0 8px}
+.lede{font:400 17px/1.6 Fraunces,Georgia,serif;color:#33302A}
+ol.docket{list-style:none;padding:0;margin:0}ol.docket li{padding:12px 0;border-bottom:1px solid var(--rule);display:flex;gap:14px}
+ol.docket li b{font:600 18px Fraunces,Georgia,serif}ol.docket .tag{margin-left:auto;white-space:nowrap;font:500 11px IBM Plex Mono,monospace;color:var(--red)}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--soft)}td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace}
+.stamp{display:inline-block;border:2px solid var(--red);color:var(--red);padding:4px 10px;font:600 12px IBM Plex Mono,monospace;letter-spacing:.05em;margin:10px 0}
+.ev{color:var(--red);font-family:"IBM Plex Mono",monospace;font-size:12px}
+.note{background:var(--hl);padding:10px 12px;font-size:13px;border-left:3px solid #C9A227}
+aside{font-size:13px}aside .box{border:1px solid var(--rule);background:var(--white);padding:14px;margin-bottom:16px}
+aside ul{padding-left:18px;margin:6px 0}
+.msg{padding:10px 0;border-bottom:1px solid var(--rule)}.msg small{display:block;color:var(--soft);font:500 11px IBM Plex Mono,monospace;text-transform:uppercase}
+.msg.agent{border-left:3px solid #C9A227;padding-left:12px}
+.opt{border:1px solid var(--rule);padding:12px;margin:8px 0;cursor:pointer;background:#fff}.opt.sel{border:2px solid var(--green)}
+.opt b{font-family:Fraunces,Georgia,serif;font-size:16px}
+.approve{background:var(--red);color:#fff;border:0;padding:12px 18px;font-weight:600;width:100%}
+.approve:disabled{background:var(--green)} .done{color:var(--green);font-weight:600}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+@media(max-width:900px){main{grid-template-columns:1fr;padding:20px}header,nav{padding-left:16px;padding-right:16px}}
+</style></head><body>
+<header><b>CONVERGE</b><span>Direction A — Evidence-first editorial · PROTOTYPE · not the final design</span></header>
+<nav><a href="#" class="on">Overview</a><a href="#">Cases</a><a href="#">Evidence</a><a href="#">Decisions</a><a href="#">Activity</a><a href="#">Settings</a></nav>
+<main><div>
+<p class="lede">Today's docket — 3 cases await approval. 1 supplier counter-offer needs a decision today.</p>
+<h2>What changed since yesterday</h2>
+<p>14:02 — DairyCo countered at $0.19 / fl oz for 6 weeks <span class="ev">[E3]</span>. &nbsp;09:40 — Recipe Court: 2 of 3 blind scores in. &nbsp;Yesterday — Correction: guest confirmed 2 of 3 claims.</p>
+<h2>Cases awaiting approval</h2>
+<ol class="docket">
+<li><b>1.</b><span><strong>HAG-014 — DairyCo cream</strong><br><span style="color:var(--soft)">Counter-offer $0.19/fl oz saves $48.00/month vs $0.24. Needs owner approval.</span></span><span class="tag">AWAITING</span></li>
+<li><b>2.</b><span><strong>CRT-007 — Nonna's ragù</strong><br><span style="color:var(--soft)">Test-cook verdict 4–1 for the 3-hour version. Family vote open.</span></span><span class="tag">VOTE OPEN</span></li>
+<li><b>3.</b><span><strong>COR-003 — Ep. 12, Dr. Osei</strong><br><span style="color:var(--soft)">Guest corrected “led” → “co-led”. Errata draft ready for host.</span></span><span class="tag">AWAITING</span></li>
+</ol>
+
+<h2>HAG-014 — DairyCo heavy cream price rise</h2>
+<p class="stamp">STATUS: PROPOSAL — AWAITING OWNER APPROVAL</p>
+<p><strong>The claim.</strong> DairyCo raised heavy cream from $0.16 to $0.24 per fluid ounce (+50%) <span class="ev">[E1]</span>. At 6 fl oz per Alfredo portion, that adds $0.48 to every plate — $19.20 a week, $998 a year at 40 plates a week <span class="ev">[E2]</span>.</p>
+<h3>The numbers — deterministic, not generated</h3>
+<table><tr><th>Measure</th><th class="num">Before</th><th class="num">Now ($0.24)</th><th class="num">At $0.19</th></tr>
+<tr><td>Cream cost / serving</td><td class="num">$0.96</td><td class="num">$1.44</td><td class="num">$1.14</td></tr>
+<tr><td>Total food cost / serving</td><td class="num">$4.58</td><td class="num">$5.06</td><td class="num">$4.76</td></tr>
+<tr><td>Food-cost % (menu $16.00)</td><td class="num">28.6%</td><td class="num">31.6%</td><td class="num">29.8%</td></tr>
+<tr><td>Gross margin</td><td class="num">71.4%</td><td class="num">68.4%</td><td class="num">70.2%</td></tr>
+<tr><td>Extra cost / month</td><td class="num">—</td><td class="num">$83.20</td><td class="num">$35.20</td></tr></table>
+<p style="color:var(--soft);font-size:12px">Assumptions: 160 plates/month; other ingredients $3.62/serving; 30% food-cost target → max sustainable cream price $0.20/fl oz. Gross profit ≠ net profit.</p>
+<h3>The options</h3>
+<div class="opt sel" onclick="pick(this,0)" tabindex="0"><b>A — Accept $0.19 for 6 weeks</b><br>Supplier counter-offer. Saves $48.00/month vs $0.24. Recommended.</div>
+<div class="opt" onclick="pick(this,1)" tabindex="0"><b>B — Hold $0.16 for 4 weeks, commit 25 L/week</b><br>Best price, needs volume commitment. Supplier has not agreed.</div>
+<div class="opt" onclick="pick(this,2)" tabindex="0"><b>C — Raise Alfredo to $17.00</b><br>Restores margin, risks demand. Owner said: never without asking.</div>
+<p id="impact">Selected: A — at $0.19, food cost 29.8%, extra cost $35.20/month.</p>
+<h3>The negotiation — Switch room #haggle-dairyco</h3>
+<div class="msg"><small>14:02 · DairyCo rep · Mattermost</small>“Best I can do is $0.19 for 6 weeks. After that we review.”</div>
+<div class="msg agent"><small>14:03 · Negotiation Agent · Switch</small>“$0.19 is inside your mandate (max $0.20). It saves $48.00/month vs $0.24 and keeps food cost under 30%. I recommend accepting — and filing the price + expiry as a room document.”</div>
+<div class="msg"><small>14:05 · Financial Analyst (agent)</small>“Checked: 6 fl oz × $0.19 = $1.14/serving. Total $4.76, 29.8%. Maths verified against recipe file [E2].”</div>
+<button class="approve" id="appr" onclick="approve()">Approve — “I approve $0.19/fl oz for 6 weeks”</button>
+<p id="signed" class="done" hidden>✓ Approved by Owner, 5 Nov 2026 — recorded in the audit trail with timestamp and terms.</p>
+</div>
+<aside>
+<div class="box"><h3>Evidence</h3><ul><li><span class="ev">[E1]</span> DairyCo invoice PDF — 4 Nov, Verified</li><li><span class="ev">[E2]</span> Alfredo recipe file — 6 fl oz cream, Verified</li><li><span class="ev">[E3]</span> Supplier message, 14:02 — Verified</li><li><span class="ev">[E4]</span> Owner mandate: target $0.16, max $0.20</li></ul></div>
+<div class="box"><h3>Margin note</h3><p class="note">Do not accept above $0.20 — that is the walk-away line. The $0.19 offer is the first one inside it.</p></div>
+<div class="box"><h3>Room</h3><p>#haggle-dairyco<br>Owner · DairyCo rep · Negotiation Agent · Financial Analyst<br><a href="#">View in Mattermost →</a></p></div>
+</aside></main>
+<script>
+const impacts=["Selected: A — at $0.19, food cost 29.8%, extra cost $35.20/month.","Selected: B — at $0.16, food cost 28.6%, extra cost $0.00/month — if agreed.","Selected: C — at $17.00 menu, food cost 29.8% at $0.24 cream, margin restored."];
+function pick(el,i){document.querySelectorAll('.opt').forEach(o=>o.classList.remove('sel'));el.classList.add('sel');document.getElementById('impact').textContent=impacts[i];}
+function approve(){const b=document.getElementById('appr');b.disabled=true;b.textContent='Approved ✓';document.getElementById('signed').hidden=false;}
+</script></body></html>

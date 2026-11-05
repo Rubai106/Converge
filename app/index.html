@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CONVERGE — Collaborative AI decision platform</title>
+<link rel="stylesheet" href="/app/styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" aria-label="Primary">
+    <div class="wordmark">CONVERGE<span class="wordmark-diamond" aria-hidden="true">◆</span></div>
+    <nav aria-label="Sections">
+      <button class="nav-item is-active" data-view="overview" aria-current="page">Overview</button>
+      <button class="nav-item" data-view="cases">Active Cases <span class="nav-badge" id="nav-case-count">–</span></button>
+      <button class="nav-item" data-view="workflows">Workflows</button>
+      <button class="nav-item" data-view="evidence">Evidence</button>
+      <button class="nav-item" data-view="decisions">Decisions</button>
+      <button class="nav-item" data-view="activity">Activity</button>
+      <button class="nav-item" data-view="settings">Settings</button>
+    </nav>
+    <div class="sidebar-foot">
+      <p class="switch-state"><span class="dot dot-amber" aria-hidden="true"></span><span id="sidebar-switch">Switch: checking…</span></p>
+      <p class="sidebar-note">Demo data is fictional. Money is deterministic backend calculation, never LLM-invented.</p>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <nav class="breadcrumb" aria-label="Breadcrumb" id="breadcrumb">Overview</nav>
+      <div class="topbar-right">
+        <label class="search-wrap">
+          <span class="visually-hidden">Search cases</span>
+          <input id="search" type="search" placeholder="Search cases, evidence…  ⌘K" autocomplete="off">
+        </label>
+        <span class="switch-pill" id="switch-pill" title="Simulated stub — not a live Switch connection">● SIMULATED-STUB</span>
+        <span class="user-chip" title="Signed in as the case owner">Mara · Owner</span>
+      </div>
+    </header>
+
+    <main id="view" class="view" tabindex="-1"></main>
+
+    <footer class="app-footer">
+      CONVERGE demo — fictional data. Gross profit is shown separately from net profit; rent, labour and overhead are not in this model.
+      Switch integration is a labelled simulation until a real Switch server (Console 0.40.1 / core 0.31.0) is connected.
+    </footer>
+  </div>
+</div>
+
+<nav class="bottomnav" aria-label="Sections (mobile)">
+  <button class="nav-item is-active" data-view="overview">Overview</button>
+  <button class="nav-item" data-view="cases">Cases</button>
+  <button class="nav-item" data-view="workflows">Workflows</button>
+  <button class="nav-item" data-view="evidence">Evidence</button>
+  <button class="nav-item" data-view="decisions">Decisions</button>
+  <button class="nav-item" data-view="activity">Activity</button>
+  <button class="nav-item" data-view="settings">Settings</button>
+</nav>
+
+<!-- Switch room drawer -->
+<div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+<aside class="drawer" id="room-drawer" aria-label="Switch room" hidden>
+  <div class="drawer-head">
+    <div>
+      <h2 id="drawer-title">Switch room</h2>
+      <p class="drawer-sub" id="drawer-sub"></p>
+    </div>
+    <button class="ghost-btn" id="drawer-close" aria-label="Close room">✕</button>
+  </div>
+  <p class="sim-label">SIMULATED — stub server, not Switch. Messages here are demo transcript only.</p>
+  <div class="mandate-box" id="drawer-mandate" hidden></div>
+  <div class="room-log" id="room-log" aria-live="polite"></div>
+  <form class="room-form" id="room-form">
+    <label class="visually-hidden" for="room-text">Post a message to the room</label>
+    <input id="room-text" placeholder="Post as Mara (owner) to the room…" required autocomplete="off">
+    <button class="btn" type="submit">Post</button>
+  </form>
+</aside>
+
+<!-- Approval confirmation dialog -->
+<div class="modal-backdrop" id="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h2 id="modal-title">Confirm approval</h2>
+    <p class="modal-terms" id="modal-terms"></p>
+    <p class="modal-note">This records a human approval in the audit trail. Agents propose; only a human may approve.</p>
+    <div class="modal-actions">
+      <button class="ghost-btn" id="modal-cancel">Cancel</button>
+      <button class="btn" id="modal-confirm">Approve these terms</button>
+    </div>
+    <p class="modal-error" id="modal-error" role="alert" hidden></p>
+  </div>
+</div>
+
+<script src="/app/app.js"></script>
+</body>
+</html>

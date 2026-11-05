@@ -1,0 +1,88 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CONVERGE — Direction B · Premium operations workspace (prototype)</title>
+<style>
+:root{--bg:#F4F6F8;--panel:#fff;--line:#D9DEE3;--ink:#0F1B2D;--soft:#5A6B7F;--teal:#0E7C6B;--red:#B3261E;--amber:#8A6D00;--amberbg:#FFF3CD;--brass:#B9975B}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:400 13px/1.5 Inter,system-ui,sans-serif;display:flex;min-height:100vh}
+aside{width:232px;background:#fff;border-right:1px solid var(--line);padding:16px 12px;flex-shrink:0}
+aside b{font-size:17px;letter-spacing:.02em}aside b i{color:var(--brass);font-style:normal}
+aside nav{margin-top:20px;display:flex;flex-direction:column}aside nav a{padding:9px 10px;color:var(--soft);text-decoration:none;border-radius:4px;display:flex;justify-content:space-between}
+aside nav a.on{background:#EAF4F1;color:var(--ink);font-weight:600}aside nav a span{background:#E8EDF1;border-radius:10px;padding:0 7px;font-size:11px}
+main{flex:1;padding:16px 20px;min-width:0}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.top input{padding:8px 10px;border:1px solid var(--line);border-radius:4px;width:260px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:12px 14px}
+.kpi small{color:var(--soft);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.kpi b{display:block;font:600 22px "IBM Plex Mono",monospace;margin-top:4px}
+.grid{display:grid;grid-template-columns:320px 1fr 300px;gap:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:14px}
+.panel h2{font-size:13px;margin:0 0 10px}.panel h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--soft);margin:14px 0 6px}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px 6px;border-bottom:1px solid #EDF0F3;text-align:left}
+th{color:var(--soft);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+.hero{font:600 26px "IBM Plex Mono",monospace}.hero small{font:500 13px Inter,sans-serif;color:var(--soft)}
+.bullet{height:10px;background:#E8EDF1;border-radius:2px;position:relative;margin:8px 0 4px}
+.bullet i{position:absolute;left:0;top:0;bottom:0;background:var(--red);border-radius:2px;width:31.6%}
+.bullet em{position:absolute;left:30%;top:-3px;bottom:-3px;width:2px;background:var(--ink)}
+.steps{display:flex;gap:0;margin:10px 0}.steps span{flex:1;text-align:center;font-size:11px;padding:6px 2px;border-bottom:2px solid var(--line);color:var(--soft)}
+.steps span.done{border-color:var(--teal);color:var(--teal);font-weight:600}.steps span.cur{border-color:var(--amber);color:var(--amber);font-weight:700}
+tr.sel{background:#EAF4F1}tr{cursor:pointer}
+.pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.pill.a{background:var(--amberbg);color:var(--amber)}.pill.ok{background:#EAF4F1;color:var(--teal)}
+button{font:inherit;cursor:pointer}.btn{background:var(--teal);color:#fff;border:0;border-radius:4px;padding:10px 14px;font-weight:600;width:100%}
+.btn:disabled{background:#5A6B7F}.ghost{background:#fff;border:1px solid var(--line);border-radius:4px;padding:6px 10px}
+:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+@media(max-width:1280px){.grid{grid-template-columns:1fr 1fr}.grid .panel:last-child{grid-column:1/-1}}
+@media(max-width:900px){body{flex-direction:column}aside{width:100%;display:flex;gap:12px;align-items:center}aside nav{flex-direction:row;overflow-x:auto;margin:0}.kpis{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr}}
+</style></head><body>
+<aside><b>CONVERGE<i>◆</i></b><nav><a href="#" class="on">Overview</a><a href="#">Active Cases <span>6</span></a><a href="#">Workflows</a><a href="#">Evidence</a><a href="#">Decisions</a><a href="#">Activity</a><a href="#">Settings</a></nav><p style="color:var(--soft);font-size:12px;margin-top:18px">● Connected — Mattermost<br>synced 2 min ago</p></aside>
+<main>
+<div class="top"><div><b style="font-size:16px">Overview</b> <span style="color:var(--soft)">/ HAG-014</span></div><input aria-label="Search cases" placeholder="Search cases, evidence…  ⌘K"></div>
+<div class="kpis"><div class="kpi"><small>Active cases</small><b>6</b></div><div class="kpi"><small>Awaiting approval</small><b>3</b></div><div class="kpi"><small>Extra cost / month</small><b>$83.20</b></div><div class="kpi"><small>Decisions this week</small><b>4</b></div></div>
+
+<div class="grid">
+<div class="panel"><h2>HAG-014 · DairyCo cream</h2>
+<div class="steps" aria-label="Workflow stage"><span class="done">Draft</span><span class="done">Investigating</span><span class="cur" aria-current="step">Proposal</span><span>Awaiting</span><span>Approved</span></div>
+<div class="hero">+$0.48 <small>/ serving · $998 / year</small></div>
+<p style="color:var(--soft);margin:6px 0">Cream $0.16 → $0.24 / fl oz (+50%) · 6 fl oz / Alfredo · menu $16.00</p>
+<div class="bullet" role="img" aria-label="Food cost 31.6 percent, target 30 percent"><i></i><em></em></div>
+<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--soft)"><span>Food cost 28.6% → <b style="color:var(--ink)">31.6%</b></span><span>Target 30%</span></div>
+<h3>Financials</h3>
+<table><tr><th>Measure</th><th class="num">Before</th><th class="num">Now</th></tr>
+<tr><td>Cream / serving</td><td class="num">$0.96</td><td class="num">$1.44</td></tr>
+<tr><td>Food cost / serving</td><td class="num">$4.58</td><td class="num">$5.06</td></tr>
+<tr><td>Gross margin</td><td class="num">71.4%</td><td class="num">68.4%</td></tr>
+<tr><td>Max sustainable price</td><td class="num" colspan="2">$0.20 / fl oz</td></tr></table>
+<p style="font-size:12px;color:var(--soft)">Mandate: target $0.16 · max $0.20 · walk away &gt; $0.20. Gross ≠ net.</p></div>
+
+<div class="panel"><h2>Negotiation — proposals</h2>
+<table id="props"><tr><th>Option</th><th class="num">Price</th><th class="num">Monthly impact</th><th>Status</th></tr>
+<tr class="sel" onclick="sel(this,0)"><td><b>A</b> Accept counter</td><td class="num">$0.19</td><td class="num">+$35.20</td><td><span class="pill a">Awaiting</span></td></tr>
+<tr onclick="sel(this,1)"><td><b>B</b> Hold, 25 L/wk</td><td class="num">$0.16</td><td class="num">$0.00</td><td><span class="pill">Proposed</span></td></tr>
+<tr onclick="sel(this,2)"><td><b>C</b> Raise menu to $17</td><td class="num">$0.24</td><td class="num">+$83.20*</td><td><span class="pill">Proposed</span></td></tr></table>
+<p id="rec" style="font-size:13px">Recommendation: <b>A</b> — inside mandate, saves $48.00/month vs $0.24, food cost 29.8%.</p>
+<p style="font-size:12px;color:var(--soft)">* At $17.00 menu, food cost returns to 29.8% — demand risk not modelled.</p>
+<h3>Switch room · #haggle-dairyco</h3>
+<p style="font-size:13px"><b>DairyCo rep 14:02</b> — “Best I can do is $0.19 for 6 weeks.”<br><b style="color:var(--teal)">NEGOTIATION AGENT 14:03</b> — “Inside mandate. Recommend accept; file price + expiry.”<br><b>Financial Analyst 14:05</b> — “6 × $0.19 = $1.14. Verified vs recipe.”</p>
+<button class="btn" id="appr" onclick="approve()">Approve $0.19 / fl oz · 6 weeks</button>
+<p id="done" hidden style="color:var(--teal);font-weight:600">✓ Approved by Owner — audit event recorded 5 Nov 2026.</p></div>
+
+<div class="panel"><h2>Participants &amp; approvals</h2>
+<p>Owner — approver · <span class="pill a">Pending</span><br>DairyCo rep — supplier · online<br>Negotiation Agent — <span style="color:var(--teal)">● active</span><br>Financial Analyst — <span style="color:var(--teal)">● active</span></p>
+<h3>Needs a decision today</h3>
+<p>HAG-014 DairyCo — $0.19 counter<br>CRT-007 Ragù — family vote<br>COR-003 Ep. 12 — errata draft</p>
+<h3>Recent agent activity</h3>
+<p style="font-size:12px;color:var(--soft)">14:05 Analyst verified margin maths<br>14:03 Agent drafted acceptance<br>13:58 Agent parsed invoice E1</p>
+<h3>Evidence</h3><p style="font-size:12px">E1 Invoice · E2 Recipe · E3 Supplier msg · E4 Mandate — all Verified</p></div>
+</div>
+<div class="panel" style="margin-top:12px"><h2>All cases</h2>
+<table><tr><th>Case</th><th>Workflow</th><th>Counterparty</th><th class="num">Impact</th><th>Stage</th><th>Updated</th></tr>
+<tr><td>HAG-014</td><td>HAGGLE</td><td>DairyCo</td><td class="num">$83.20/mo</td><td><span class="pill a">Awaiting approval</span></td><td>14:05</td></tr>
+<tr><td>CRT-007</td><td>COURT</td><td>Family</td><td class="num">—</td><td>Discussion</td><td>09:40</td></tr>
+<tr><td>COR-003</td><td>CORRECTION</td><td>Dr. Osei</td><td class="num">—</td><td><span class="pill a">Awaiting approval</span></td><td>Yesterday</td></tr></table></div>
+</main>
+<script>
+const recs=["Recommendation: <b>A</b> — inside mandate, saves $48.00/month vs $0.24, food cost 29.8%.","Recommendation: <b>B</b> is best on price but unagreed — keep as fallback, do not rely on it.","Recommendation: <b>C</b> restores margin at $17.00 but risks demand; owner said never without asking."];
+function sel(el,i){document.querySelectorAll('#props tr').forEach(r=>r.classList.remove('sel'));el.classList.add('sel');document.getElementById('rec').innerHTML=recs[i];}
+function approve(){const b=document.getElementById('appr');b.disabled=true;b.textContent='Approved ✓';document.getElementById('done').hidden=false;}
+</script></body></html>
