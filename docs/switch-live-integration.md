@@ -84,10 +84,67 @@ is under `~/workspace/switch-server/`:
    Mattermost was up restored ingestion (verified with a fresh marker
    message appearing in `read_context`).
 7. The agent id/key in `.converge-agent.json` and the bridge id survive
-   in ~/workspace, so re-registration is not needed; the rooms survive in
-   Postgres only if its data dir survives (it does not — `/var/lib/postgresql`
-   is outside ~/workspace, so a replacement means re-running setup and
-   re-creating rooms; the evidence in this repo stays valid as a record).
+   in ~/workspace — but only as VALUES. The agent and bridge records
+   themselves live in the Postgres DB, so after a full DB loss they must
+   be re-created (the original note that "re-registration is not needed"
+   was wrong for that case — corrected 2026-11-06, see the rebuild
+   record below). Re-running setup registers a NEW bridge id, and
+   re-registering the agent returns a NEW agent id/key; the CONVERGE
+   app env must be updated with both, and the app's stored `switchRoomId`
+   pointers must be cleared so it creates fresh rooms (same names).
+   The evidence in this repo stays valid as a record of the first stack.
+
+## VM replacement + rebuild (2026-11-06 ~02:17 Dhaka)
+The runtime replaced the VM overnight (uptime 45 min at 02:17; switch-core
+log ended 01:16, Mattermost 01:11; /tmp wiped). Postgres, nginx and Docker
+were gone; `~/workspace` survived intact (`rootfs/`, `images/*.tar`,
+`.env`, `.converge-agent.json`). Rebuilt the same night under the
+standing restart permission:
+- Apt mirror fixed (cogentco removed); `postgresql-16` + `nginx`
+  reinstalled. No Docker re-pull or re-extract was needed.
+- DBs/roles recreated by `~/workspace/switch-server/rebuild-db.sh`
+  (kept for the next replacement): DBs `switch` + `mattermost`, owner
+  role `postgres`, runtime role `switch_app`. Lesson recorded there:
+  psql does NOT interpolate `:vars` in `-c` strings on this build —
+  SQL goes through stdin heredocs.
+- Started in order, Mattermost BEFORE switch-core (ping OK ~02:21;
+  switch-core `/health` ok, `/health/ready` 7/7 healthy after a
+  transient LISTEN-connection backoff at startup); nginx gateway 200;
+  `run-setup.sh` re-ran (admin/team/user recreated).
+- **New bridge `ee7d9b4e-815d-4bd2-84a1-1a82d095667d`** (default,
+  listening) — the old `bcdd5c54-…` died with the DB.
+- **Agent re-registered: `1935ede7-afc2-4294-b4c6-5058e664be22`**
+  (`register-converge-agent.py`; key saved to `.converge-agent.json`,
+  never printed). `GET /agents/{id}/ops` → 53 ops, as before.
+- **Rooms recreated (same names, new ids):** `#haggle-dairyco`
+  `87c1575b-0a0e-4fab-95ec-072197846f0f` (event
+  `sw_a3f97628130c425ea0e8945fbedb5544`), `#recipe-ragu`
+  `429e7105-3025-42f3-9278-c95fed982dd9` (event
+  `sw_23ffc9ee6af34f7ab836000a1f83af69`), `#episode-osei`
+  `45eee999-1b64-404f-8d0b-861c0da82489` (event
+  `sw_a6aa7890e1c9445b83862729408ee3b9`). The app's stale `switchRoomId`
+  pointers were cleared first (room ids only — approval, audit trail
+  and app-stored messages untouched).
+- **Bridge re-verified live on the rebuilt stack**
+  (`verify-bridge-rebuilt.py`): a human marker posted as Mattermost
+  user `user` into #haggle-dairyco appeared in Switch `read_context`
+  on the first attempt (~5s), 7 threads in the room timeline.
+- **What was lost:** the Switch-side room timelines from the first
+  stack — including the original 10-thread HAGGLE approval arc in
+  Mattermost/Switch — lived in the wiped Postgres and are
+  unrecoverable. **What survived:** CONVERGE's own record (HAG-014
+  COMPLETED, approval + audit events + app-stored messages in
+  `data/converge.json`; the evidence files in
+  `submission/evidence/switch-live/` stay valid as a record of the
+  first stack). The fresh #haggle-dairyco carries an explicit record
+  note: the approval happened in the original room on 2026-11-06, is
+  preserved in the audit trail, the room was recreated after the
+  replacement, and the approval was NOT re-staged.
+- Loopback binding re-verified after the rebuild (`ss -tlnp`):
+  3000/3100/8000/8065/5432 all on 127.0.0.1 (5432 also ::1).
+- The CONVERGE real env now lives at
+  `~/workspace/switch-server/.converge-real.env` (NOT /tmp — /tmp does
+  not survive a replacement) with the new agent id/key + bridge id.
 
 ## Security — loopback only (verified 2026-11-06)
 This VM has no public interface (only `lo` and a CGNAT `host0`
@@ -110,8 +167,13 @@ PORT=3100
 SWITCH_BASE_URL=http://localhost:8000
 SWITCH_API_KEY=<from .converge-agent.json>
 SWITCH_AGENT_ID=<from .converge-agent.json>
-SWITCH_BRIDGE_ID=bcdd5c54-fa46-4af2-a5a5-ccc097138ae0
+SWITCH_BRIDGE_ID=ee7d9b4e-815d-4bd2-84a1-1a82d095667d
 ```
+Kept at `~/workspace/switch-server/.converge-real.env` (rebuilt 2026-11-06
+after the VM replacement; the old `/tmp/converge-real.env` did not
+survive it). Current agent id `1935ede7-afc2-4294-b4c6-5058e664be22`,
+current bridge id above (both replaced with the first stack's ids — the
+old values are dead and must not be used).
 With these set, `/api/status` reports REAL-SWITCH with the live health
 probe, and `/api/switch/*` talks to the real server (per-agent ops,
 SSE event stream with heartbeat, room creation on first post).

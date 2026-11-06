@@ -43,24 +43,19 @@ const STRATEGY_TERMS = {
 };
 const PROPOSAL_TO_STRATEGY = { P1: 'freeze', P2: 'counter-019' };
 
-// COURT blind scores — FALLBACK SEED only. The server now holds the ratings
+// COURT blind scores — FALLBACK only. The server now holds the ratings
 // (GET /api/cases/CRT-007 returns ratings + tally; POST /api/court/rate
-// persists new ones). This seed is used only if the case carries no ratings.
+// persists new ones). This fallback is used only if the case carries no
+// ratings at all — and it deliberately carries NO sample→version mapping
+// and NO seed scores: the mapping is blind information the server
+// withholds until every reader has submitted (hardening 2026-11-06), so
+// it must not sit in the shipped bundle either. With no ratings the UI
+// shows the blind empty state (codes only, tally hidden).
 const COURT_DEMO = {
-  samples: { S1: 'Nonna (card)', S2: 'Auntie', S3: 'Cousin' },
+  samples: { S1: 'S1', S2: 'S2', S3: 'S3' },
   criteria: ['taste', 'texture', 'aroma', 'appearance', 'difficulty', 'overall'],
   readers: ['Reader A', 'Reader B', 'Reader C'],
-  scores: {
-    S1: { 'Reader A': { taste: 5, texture: 4, aroma: 5, appearance: 4, difficulty: 3, overall: 5 },
-         'Reader B': { taste: 4, texture: 4, aroma: 4, appearance: 5, difficulty: 3, overall: 4 },
-         'Reader C': { taste: 5, texture: 5, aroma: 4, appearance: 4, difficulty: 4, overall: 5 } },
-    S2: { 'Reader A': { taste: 4, texture: 5, aroma: 4, appearance: 4, difficulty: 4, overall: 4 },
-         'Reader B': { taste: 4, texture: 3, aroma: 4, appearance: 3, difficulty: 4, overall: 4 },
-         'Reader C': { taste: 5, texture: 4, aroma: 5, appearance: 4, difficulty: 3, overall: 5 } },
-    S3: { 'Reader A': { taste: 3, texture: 3, aroma: 4, appearance: 3, difficulty: 5, overall: 3 },
-         'Reader B': { taste: 4, texture: 3, aroma: 3, appearance: 4, difficulty: 5, overall: 4 },
-         'Reader C': { taste: 3, texture: 4, aroma: 3, appearance: 3, difficulty: 4, overall: 3 } },
-  },
+  scores: {},
 };
 // CORRECTION claim -> evidence mapping, derived from the seeded evidence notes:
 // E1 (co-led survey) bears on the "I led" claim; E2 (paper says 38%) on the "40%" claim.
@@ -638,15 +633,20 @@ function courtHeat(c) {
   const sample = courtSample;
   const cs = courtScoresFor(c);
   const ts = courtTallyState(c);
-  const means = courtMeans(c)[sample];
-  const rows = cs.criteria.map((crit) => {
+  // A case with no ratings at all (server fallback) has no scores for
+  // any sample — render the blind empty state instead of crashing on
+  // the missing means. The rating form below still accepts the first
+  // rating, so the case can start from zero.
+  const hasScores = Boolean(cs.scores[sample]);
+  const means = hasScores ? courtMeans(c)[sample] : null;
+  const rows = hasScores ? cs.criteria.map((crit) => {
     const vals = cs.readers.map((r) => cs.scores[sample][r][crit]);
     const range = Math.max(...vals) - Math.min(...vals);
     const heat = (v) => v >= 4.5 ? 'heat-5' : v >= 4 ? 'heat-4' : v >= 3.5 ? 'heat-3' : v >= 3 ? 'heat-2' : 'heat-1';
     return `<tr class="${range >= 2 ? 'disagree' : ''}"><th scope="row">${esc(crit)}${range >= 2 ? ' <span class="disagree-tag">DISAGREE</span>' : ''}</th>
       ${vals.map((v) => `<td class="num ${heat(v)}">${v}</td>`).join('')}
-      <td class="num">${means[crit].toFixed(2)}</td><td class="num">${range}</td></tr>`;
-  }).join('');
+      <td class="num">${ts.complete ? means[crit].toFixed(2) : '—'}</td><td class="num">${range}</td></tr>`;
+  }).join('') : `<tr><td colspan="${cs.readers.length + 3}">No ratings submitted yet for this sample — be the first to rate it below.</td></tr>`;
   const leader = Object.entries(courtMeans(c)).sort((a, b) => b[1].overall - a[1].overall)[0];
   // The sample→version mapping is blind information: show codes only
   // until the tally is complete (QA 2026-11-06).

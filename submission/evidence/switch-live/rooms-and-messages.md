@@ -6,7 +6,9 @@ presented as live here.
 
 ## Server
 - switch-core **0.31.0** (published image `ghcr.io/sandbox-quantum/switch-core:0.31.0`),
-  Python app `python -m switch_core.main`, uvicorn on **0.0.0.0:8000**.
+  Python app `python -m switch_core.main`, uvicorn on **127.0.0.1:8000**
+  (loopback only — the 0.0.0.0 bind from the first boot was hardened
+  2026-11-06; verified with `ss -tlnp`).
 - Gateway (nginx, published `gateway:0.31.0` files) on **localhost:3000**.
 - Mattermost Team Edition **11.9.0** on **localhost:8065**, team `switch`.
 - PostgreSQL **16.15** (Ubuntu package) with databases `switch` + `mattermost`.
@@ -35,6 +37,28 @@ presented as live here.
 - **recipe-ragu** — Switch room `ef6e38af-64b7-47fe-9f4d-7648daa58193`
   (created through the CONVERGE app's real Switch wiring).
 - **episode-osei** — created through the CONVERGE app's real Switch wiring.
+
+## Addendum — VM replacement + rebuild (2026-11-06 ~02:17 Dhaka)
+The runtime replaced the VM overnight; the Postgres data dir did not
+survive, so the Switch-side room timelines above (including the original
+10-thread HAGGLE approval arc) are unrecoverable. Everything in this
+file stays valid as a record of the **first stack**. The stack was
+rebuilt the same night (see `docs/switch-live-integration.md`): new
+agent `1935ede7-afc2-4294-b4c6-5058e664be22`, new bridge
+`ee7d9b4e-815d-4bd2-84a1-1a82d095667d`, rooms recreated with the same
+names and new ids — #haggle-dairyco
+`87c1575b-0a0e-4fab-95ec-072197846f0f` (event
+`sw_a3f97628130c425ea0e8945fbedb5544`), #recipe-ragu
+`429e7105-3025-42f3-9278-c95fed982dd9` (event
+`sw_23ffc9ee6af34f7ab836000a1f83af69`), #episode-osei
+`45eee999-1b64-404f-8d0b-861c0da82489` (event
+`sw_a6aa7890e1c9445b83862729408ee3b9`). The bridge was re-verified live
+(human marker posted in Mattermost appeared in Switch `read_context`
+on the first attempt). CONVERGE's own record survived intact: HAG-014
+COMPLETED, approval + audit events + app-stored messages in
+`data/converge.json`, and the fresh #haggle-dairyco carries a record
+note stating the approval happened in the original room on 2026-11-06
+and was NOT re-staged.
 
 ## HAGGLE approval workflow (real, end to end)
 1. Agent posted the deterministic HAG-014 analysis into #haggle-dairyco

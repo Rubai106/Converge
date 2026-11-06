@@ -65,6 +65,27 @@ async function readBody(req) {
   return s ? JSON.parse(s) : {};
 }
 
+// ---------- public case view (COURT blindness) ----------
+// COURT server-side blindness (hardening 2026-11-06): the sample→version
+// mapping is blind information. Until every reader has submitted, the API
+// returns samples as code-only [{code}] — the mapping never leaves the
+// server, so no client can recover it by inspecting JSON. Once the
+// ratings are complete the full mapping is revealed with the tally.
+// Individual scores stay visible by design (the heat table shows scores
+// as submitted; the UI copy says so). What is withheld is the mapping
+// and the official tally — the derived result, not the raw scores. A
+// caller could average visible scores by hand; that is inherent to the
+// chosen transparency and is documented, not hidden.
+function courtRatingsComplete(c) {
+  const expected = (c.readers?.length || 0) * (c.samples?.length || 0);
+  return expected > 0 && (c.ratings || []).length >= expected;
+}
+function publicCaseView(c) {
+  if (c.workflow !== 'COURT' || courtRatingsComplete(c)) return c;
+  const { samples, ...rest } = c;
+  return { ...rest, samples: (samples || []).map((s) => ({ code: s.code })) };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   try {
@@ -76,7 +97,7 @@ const server = createServer(async (req, res) => {
       return send(res, 404, { error: 'not found' });
     }
     // --- API: cases ---
-    if (url.pathname === '/api/cases' && req.method === 'GET') return send(res, 200, data.cases);
+    if (url.pathname === '/api/cases' && req.method === 'GET') return send(res, 200, data.cases.map(publicCaseView));
     if (url.pathname === '/api/status' && req.method === 'GET') {
       let switchHealth = stubHealth();
       if (SWITCH_BASE_URL) { try { switchHealth = await probeHealth(SWITCH_BASE_URL); } catch (e) { switchHealth = { ok: false, error: String(e) }; } }
@@ -97,12 +118,16 @@ const server = createServer(async (req, res) => {
       if (c.workflow === 'COURT') {
         out.conflicts = courtConflicts(c.versions);
         out.readers = c.readers || [];
-        out.samples = c.samples || [];
         out.ratings = c.ratings || [];
         out.ratingsExpected = (c.readers?.length || 0) * (c.samples?.length || 0);
         out.ratingsComplete = out.ratingsExpected > 0 && out.ratings.length >= out.ratingsExpected;
         // Scores are revealed only after every reader has submitted.
         out.tally = out.ratingsComplete ? courtTally(out.ratings) : null;
+        // The sample→version mapping is withheld until the ratings are
+        // complete (see publicCaseView). Code-only samples here, too —
+        // the detail endpoint used to leak the mapping even though the
+        // list endpoint was fixed.
+        out.samples = out.ratingsComplete ? (c.samples || []) : (c.samples || []).map((s) => ({ code: s.code }));
       }
       if (c.workflow === 'CORRECTION') {
         out.claims = extractClaims(c.transcript).map((cl) => ({
@@ -153,7 +178,19 @@ const server = createServer(async (req, res) => {
     }
     if (url.pathname === '/api/court/tally' && req.method === 'POST') {
       const body = await readBody(req);
-      return send(res, 200, { tally: courtTally(body.ratings || []), note: 'Scores are revealed only after every reader has submitted. In this demo, submit all readers first.' });
+      // Hardening 2026-11-06: this used to be an open compute endpoint —
+      // any caller could POST arbitrary ratings (including the case's own
+      // visible scores) and get the tally before the case was complete,
+      // bypassing the tally-completeness rule. It is now case-bound: the
+      // tally is computed only from the case's stored ratings, and only
+      // when that case's ratings are complete. Caller-supplied ratings
+      // are ignored entirely. The engine maths (courtTally) is unchanged.
+      const c = body.caseId ? getCase(data, body.caseId) : null;
+      if (!c || c.workflow !== 'COURT') return send(res, 404, { error: 'COURT case not found' });
+      const expected = (c.readers?.length || 0) * (c.samples?.length || 0);
+      const complete = expected > 0 && (c.ratings || []).length >= expected;
+      if (!complete) return send(res, 200, { tally: null, complete: false, submitted: (c.ratings || []).length, expected, note: 'Scores are revealed only after every reader has submitted.' });
+      return send(res, 200, { tally: courtTally(c.ratings), complete: true, submitted: c.ratings.length, expected });
     }
     // --- API: correction claim status (human only; persisted + audited) ---
     if (url.pathname === '/api/correction/claim' && req.method === 'POST') {

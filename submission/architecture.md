@@ -71,9 +71,11 @@ unverified items (switch-core image name, per-op JSON shapes, WS URL scheme).
 
 ## Data & security
 - JSON file store (`data/converge.json`), seeded fictional demo data.
-- Role-based access in the model: participants have roles; approval is human-only;
-  private editorial notes are kept out of guest-facing rooms (CORRECTION separates
-  `#research` from `#episode-*`).
+- Role-based access in the model: participants have roles; approval is human-only.
+  (An earlier draft of this bullet claimed CORRECTION separates a `#research`
+  room from `#episode-*` — that room does not exist; the claim was removed
+  2026-11-06 during the night hardening pass. Do not re-add it without
+  building the feature.)
 - Secrets via environment only (`SWITCH_BASE_URL`, `SWITCH_API_KEY`,
   `AGENT_REGISTRATION_TOKEN` on the server). No secrets in the repo.
 - Audit trail is append-only per case; every state change, message and approval

@@ -28,6 +28,18 @@ async function waitForServer() {
 test.before(async () => {
   hadData = existsSync(dataFile);
   if (hadData) backup = readFileSync(dataFile, 'utf8');
+  // Inject a scratch incomplete COURT case (CRT-TEST: a clone of CRT-007
+  // with only 4 of 9 ratings) so the blindness tests have a live
+  // incomplete case. It is written to the same data file the server
+  // loads, and removed again when the backup is restored in after().
+  const d = JSON.parse(backup);
+  const seed = d.cases.find((x) => x.id === 'CRT-007');
+  const clone = JSON.parse(JSON.stringify(seed));
+  clone.id = 'CRT-TEST';
+  clone.title = 'Scratch blind test — do not ship';
+  clone.ratings = clone.ratings.slice(0, 4); // A/B/C on S1, A on S2
+  d.cases.push(clone);
+  writeFileSync(dataFile, JSON.stringify(d, null, 2));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
   await waitForServer();
 });
@@ -59,6 +71,86 @@ test('COURT: duplicate rating is rejected, invalid score is rejected', async () 
     body: JSON.stringify({ caseId: 'CRT-007', reader: 'Reader A', sampleCode: 'S1', scores: { taste: 9, texture: 5, aroma: 5, appearance: 5, difficulty: 5, overall: 5 } }),
   });
   assert.equal(bad.status, 400);
+});
+
+// Hardening 2026-11-06: the sample→version mapping is blind information.
+// The UI used to hide it, but GET /api/cases and /api/cases/:id shipped
+// it in JSON, so any client could read S1=card / S2=auntie / S3=cousin
+// before the ratings were complete. Both endpoints must now return
+// code-only samples until the ratings are complete.
+test('COURT: incomplete case withholds the mapping in detail and list', async () => {
+  const c = await (await fetch(`${base}/api/cases/CRT-TEST`)).json();
+  assert.equal(c.ratings.length, 4);
+  assert.equal(c.ratingsExpected, 9);
+  assert.equal(c.ratingsComplete, false);
+  assert.equal(c.tally, null);
+  assert.equal(c.samples.length, 3);
+  for (const s of c.samples) {
+    assert.ok(s.code);
+    assert.equal(s.version, undefined, `incomplete case must not leak the mapping for ${s.code}`);
+  }
+  // The versions themselves stay visible (the comparison matrix is an
+  // analysis view); only the link from code to version is withheld.
+  assert.equal(c.versions.length, 3);
+  const list = await (await fetch(`${base}/api/cases`)).json();
+  const listed = list.find((x) => x.id === 'CRT-TEST');
+  assert.ok(listed);
+  for (const s of listed.samples) assert.equal(s.version, undefined);
+});
+
+test('COURT: /api/court/tally is case-bound and cannot bypass completeness', async () => {
+  // Caller-supplied ratings must be ignored: even a complete-looking
+  // fabricated set must not produce a tally for an incomplete case.
+  const fake = Array.from({ length: 9 }, (_, i) => ({
+    reader: `Reader ${'ABC'[i % 3]}`, sampleCode: `S${(i % 3) + 1}`,
+    scores: { taste: 5, texture: 5, aroma: 5, appearance: 5, difficulty: 5, overall: 5 },
+  }));
+  const bypass = await (await fetch(`${base}/api/court/tally`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ caseId: 'CRT-TEST', ratings: fake }),
+  })).json();
+  assert.equal(bypass.tally, null);
+  assert.equal(bypass.complete, false);
+  assert.equal(bypass.submitted, 4);
+  assert.equal(bypass.expected, 9);
+  // The complete case still returns its real tally from stored ratings.
+  const done = await (await fetch(`${base}/api/court/tally`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ caseId: 'CRT-007' }),
+  })).json();
+  assert.equal(done.complete, true);
+  assert.equal(done.tally.S1.means.overall, 4.67);
+  assert.equal(done.tally.S3.means.overall, 3.33);
+  // Unknown or non-COURT cases are rejected.
+  assert.equal((await fetch(`${base}/api/court/tally`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })).status, 404);
+  assert.equal((await fetch(`${base}/api/court/tally`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: 'HAG-014' }) })).status, 404);
+});
+
+test('COURT: completing the ratings reveals the mapping and the tally', async () => {
+  // Submit the 5 remaining ratings with the seed's exact scores.
+  const remaining = [
+    { reader: 'Reader B', sampleCode: 'S2', scores: { taste: 4, texture: 3, aroma: 4, appearance: 3, difficulty: 4, overall: 4 } },
+    { reader: 'Reader C', sampleCode: 'S2', scores: { taste: 5, texture: 4, aroma: 5, appearance: 4, difficulty: 3, overall: 5 } },
+    { reader: 'Reader A', sampleCode: 'S3', scores: { taste: 3, texture: 3, aroma: 4, appearance: 3, difficulty: 5, overall: 3 } },
+    { reader: 'Reader B', sampleCode: 'S3', scores: { taste: 4, texture: 3, aroma: 3, appearance: 4, difficulty: 5, overall: 4 } },
+    { reader: 'Reader C', sampleCode: 'S3', scores: { taste: 3, texture: 4, aroma: 3, appearance: 3, difficulty: 4, overall: 3 } },
+  ];
+  for (let i = 0; i < remaining.length; i++) {
+    const r = await (await fetch(`${base}/api/court/rate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caseId: 'CRT-TEST', ...remaining[i] }),
+    })).json();
+    assert.equal(r.submitted, 5 + i);
+    if (i < remaining.length - 1) assert.equal(r.tally, null, 'tally stays hidden until the last rating');
+    else { assert.equal(r.complete, true); assert.equal(r.tally.S1.means.overall, 4.67); }
+  }
+  const c = await (await fetch(`${base}/api/cases/CRT-TEST`)).json();
+  assert.equal(c.ratingsComplete, true);
+  assert.equal(c.tally.S1.means.overall, 4.67);
+  assert.equal(c.tally.S3.means.overall, 3.33);
+  assert.equal(c.samples.find((s) => s.code === 'S1').version, 'card');
+  assert.equal(c.samples.find((s) => s.code === 'S2').version, 'auntie');
+  assert.equal(c.samples.find((s) => s.code === 'S3').version, 'cousin');
 });
 
 test('CORRECTION: claim status persists across reads and is audited', async () => {

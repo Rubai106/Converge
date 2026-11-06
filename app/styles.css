@@ -204,7 +204,7 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
 .drawer-sub{color:var(--soft);font-size:12px;margin-top:2px}
 .sim-label{margin:0 16px 10px;padding:7px 10px;background:var(--amber-bg);color:var(--amber);
   font-size:11px;font-weight:700;letter-spacing:.03em;border-radius:4px}
-.sim-label.live-label{background:#e6f4f1;color:#0e7c6b}
+.sim-label.live-label{background:#e6f4f1;color:#0A5C50} /* was #0e7c6b = 4.52:1 (AA-barely); #0A5C50 = 6.98:1 (night hardening 2026-11-06) */
 .sim-label.warn-label{background:var(--amber-bg);color:#6E5700}
 .drawer .mandate-box{margin:0 16px 10px}
 .room-log{flex:1;overflow-y:auto;padding:4px 16px 12px}
@@ -250,7 +250,11 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
 }
 @media (max-width:480px){
   .kpi b{font-size:18px}
-  .search-wrap input{width:140px}
+  /* Night hardening 2026-11-06: the 140px search truncated its own
+     placeholder ("Search cases, evidence… ⌘K"). On a phone the search
+     takes its own full-width row instead of a cramped fixed width. */
+  .search-wrap{flex:1 1 100%}
+  .search-wrap input{width:100%}
 }
 
 /* ---------- QA 2026-11-06: skip link, transcript list, rating form ---------- */

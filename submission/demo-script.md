@@ -51,8 +51,23 @@ and what do you say back?" Show the dashboard: 3 cases, HAG-014 completed.
 - HAG-014 is COMPLETED in the recorded run because the approval already
   happened in the real room. That is the honest record; do not re-stage
   the approval live.
+- **Staleness note (2026-11-06 night hardening):** the video was recorded
+  on the first Switch stack, before two changes. (1) It was recorded
+  before the stale-`pendingApproval` fix, so the HAG-014 overview shows a
+  "Pending: $0.19/fl oz for 6 weeks" line above the APPROVED stamp on the
+  completed case; the live app no longer shows that line
+  (`pendingApproval` is cleared on approval). (2) The room timelines it
+  shows are the first stack's — the VM was replaced later that night and
+  the rooms were recreated; the current rooms carry a record note instead
+  of the original approval post. The video was NOT re-recorded: the
+  section-title burn-in step is not scripted, and re-recording without
+  the titles would be a worse artefact than the two stale frames.
+- Step 4 above describes the first stack's room. In the current room the
+  owner's original approval post is replaced by a record note stating the
+  approval happened in the original room on 2026-11-06 and was preserved
+  in CONVERGE's audit trail (see `docs/switch-live-integration.md`).
 
 ## Reproduce it
-`npm test` (19/19) → `npm start` (with the real Switch env — see
+`npm test` (33/33) → `npm start` (with the real Switch env — see
 `.env.example`) → http://localhost:3100 → open HAG-014 → open the room →
 see the approval in the Audit tab.
