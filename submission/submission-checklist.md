@@ -6,7 +6,7 @@ Tracks: Best Business Workflow ($2,000) + Code with Wispr ($500, side track)
 Repo (canonical): https://github.com/Rubai106/accordweave (public, main)
 
 ## Done
-- [x] Shared decision engine + HAGGLE end-to-end (tests 33/33, check passes)
+- [x] Shared decision engine + HAGGLE end-to-end (tests 151/151, check passes)
 - [x] COURT + CORRECTION slices, both server-persisted and audited
 - [x] **Real Switch integration (2026-11-06): switch-core 0.31.0 + Mattermost 11.9.0 live on this VM** — `GET /health` 200 `{"status":"ok"}`, `/health/ready` all healthy; agent converge-facilitator registered; 53 live per-agent ops; Mattermost bridge active; 3 real rooms; HAGGLE approval completed end to end in the real room (see docs/switch-live-integration.md + submission/evidence/switch-live/)
 - [x] CONVERGE app wired to the real server (REAL-SWITCH mode; /api/status live health; /api/switch/rooms lists the 3 real rooms)

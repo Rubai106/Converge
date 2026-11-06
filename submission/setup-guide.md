@@ -11,7 +11,7 @@
 ```
 git clone https://github.com/Rubai106/accordweave.git
 cd accordweave
-npm test               # expect 33/33
+npm test               # expect 151/151
 npm run check          # node --check on server files
 PORT=3100 npm start
 # open http://localhost:3100

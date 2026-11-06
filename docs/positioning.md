@@ -55,8 +55,8 @@ What is hard to copy is the **assembled workflow in a real Switch room**: the hu
 
 ### Why use CONVERGE instead of chat, a spreadsheet, or an existing tool?
 
-- **Chat alone** has no structure, no maths, no approval gate, no audit trail. Decisions get lost, the loudest voice wins, and nobody can prove what was agreed.
-- **A spreadsheet alone** has the maths but no multi-party room, no negotiation, no approval, and no record of who decided what.
+- **Chat alone** on its own does not price the decision, structure a mandate, or produce an approval record — though teams can add bots, approvals and other tools around it. Decisions can get lost, the loudest voice can win, and proving what was agreed takes extra work.
+- **A spreadsheet alone** can calculate, and can be configured with sharing, comments or approval add-ons, but on its own it is not a shared negotiation with a counter-party, a backend-enforced approval gate, and preserved dissent in one record. CONVERGE's claim is that conjunction in one workflow, not that chat or spreadsheets are useless.
 - **Existing tools** each solve one step (invoice→margin, or voting, or transcription) but none carries a disagreement from intake to an audited, human-approved resolution in the room where the people already are.
 - **Why return:** the record accrues. The agreed price is filed and re-checked next month; the canonical recipe is recorded with its dissent; the errata is published with the original preserved. The next price shock, the next family dispute, the next episode — the engine is reusable, and the history is the reason to come back.
 
@@ -112,7 +112,7 @@ Scored out of 50 on a stated rubric, not the hackathon's (no official numerical 
 |---|---|---|
 | Problem & business value | 7 | A real problem, quantified benefit ($48/mo saved in the demo, margin preserved). Deducted: the supplier is fictional and there are no real users yet. |
 | Switch centrality & collaboration | 8 | Live, verified integration; the approval genuinely happens in chat. Deducted: the stub fallback exists, and the drawer shows app-stored messages only (full history is in Mattermost). |
-| Technical quality | 8 | 33/33 tests, axe-core 0 violations on 13 pages, deterministic engine, security hardened. Deducted: no live XSS probe (blocked by a platform safety filter, documented, not retried), no usability sessions. |
+| Technical quality | 8 | 151/151 tests, axe-core 0 violations on 13 pages, deterministic engine, security hardened. Deducted: no live XSS probe (blocked by a platform safety filter, documented, not retried), no usability sessions. |
 | Novelty & differentiation | 7 | The combination is genuinely unoccupied in our research (verified, two passes); COURT's mechanism is the strongest differentiator. Deducted: every component exists somewhere, and the assembly claim is weaker than a first-ever claim. |
 | Demo, evidence & presentation | 8 | A real demo video, 48 screenshots, a QA report, and an evidence package. Deducted: the video has two documented stale frames (see §7). |
 | **Total** | **38 / 50** | A strong, honest submission. Not a 45+ submission — that would need real users and usability evidence. |

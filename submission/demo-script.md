@@ -63,17 +63,38 @@ Say the framing line first: "Same engine, a completely different kind of disagre
   (`pendingApproval` is cleared on approval). (2) The room timelines it
   shows are the first stack's — the VM was replaced later that night and
   the rooms were recreated; the current rooms carry a record note instead
-  of the original approval post. The video was NOT re-recorded: the
-  section-title burn-in step is not scripted, and re-recording without
-  the titles would be a worse artefact than the two stale frames. The
-  recommendation (retain the original, disclose in writing) is recorded
-  in `docs/positioning.md` §7; the original must not be destroyed.
+  of the original approval post. Since the recording there have been
+  further changes the video does not show: the remediation pass (53/54
+  audit findings fixed), NEW-1 deep links, the GAP-2 **Submit for
+  approval** flow, the third rebuild with durable Postgres, and two
+  recoveries from it (fourth VM replacement ~16:29, fifth ~18:28–18:31
+  Dhaka) that preserved the current rooms. The video was NOT re-recorded:
+  the section-title burn-in step is not scripted, and re-recording
+  without the titles would be a worse artefact than the two stale
+  frames. The recommendation (retain the original, disclose in writing)
+  is recorded in `docs/positioning.md` §7; the original must not be
+  destroyed.
 - Step 4 above describes the first stack's room. In the current room the
   owner's original approval post is replaced by a record note stating the
   approval happened in the original room on 2026-11-06 and was preserved
-  in CONVERGE's audit trail (see `docs/switch-live-integration.md`).
+  in CONVERGE's audit trail (see `docs/switch-live-integration.md`). The
+  current rooms are the third-rebuild rooms (`#haggle-dairyco`
+  `177e6354-…`, `#recipe-ragu` `478f26a8-…`, `#episode-osei`
+  `04da8311-…`); they survived the fourth and fifth VM replacements
+  intact and were verified live 2026-11-06 ~18:36 Dhaka (two-way
+  delivery, live drawer, HAG-014 COMPLETED/P2).
 
 ## Reproduce it
-`npm test` (33/33) → `npm start` (with the real Switch env — see
+`npm test` (151/151) → `npm start` (with the real Switch env — see
 `.env.example`) → http://localhost:3100 → open HAG-014 → open the room →
 see the approval in the Audit tab.
+
+## Live-run note (2026-11-06, current build)
+HAG-014 is already COMPLETED, so the Submit for approval flow (GAP-2) is
+shown on a fresh HAGGLE case, not on HAG-014: create a case with the
+wizard (dashboard → New case), open it in DISCUSSION, select a strategy
+on the Negotiation tab — its exact terms appear above a button labelled
+**Submit for approval** — submit, and the case moves to PROPOSAL then
+AWAITING_APPROVAL with the canonical proposal id and terms; the approval
+modal shows the same terms, and a human approves. The video predates this
+flow and does not show it.

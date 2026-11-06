@@ -1,0 +1,24 @@
+{
+  "room_id": "177e6354-e07f-44eb-b385-8055faf021e6",
+  "room": "#haggle-dairyco",
+  "marker": "RECOVERY-VERIFY-1793968496",
+  "agent_id": "4b6d039c-c2db-45df-8e10-a10769ad2cfa",
+  "human_post": {
+    "post_id": "pw7kgyztz78h3ncemou7tw5h7h",
+    "create_at": 1793968496832,
+    "channel_id": "trqndbi73jnxiny7kot335y4hh"
+  },
+  "human_in_switch": {
+    "attempt": 1,
+    "threads": 9
+  },
+  "agent_post": {
+    "event_id": "sw_7df1f383fbd54850b72d4fc92e76cee0",
+    "text": "CONVERGE facilitator (live delivery test RECOVERY-VERIFY-1793968496): bridge verified - your marker arrived in the Switch room timeline. This is a genuine live delivery test on the recovered stack, not a demo conversation."
+  },
+  "agent_in_mattermost": {
+    "post_id": "ukhfcz38widm9mxhfsgy33ykyy",
+    "create_at": 1793968504375,
+    "note": "Corrected: the script first matched a stale third-rebuild post with the same text; this is the post carrying the NEW marker."
+  }
+}
