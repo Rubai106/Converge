@@ -13,9 +13,9 @@ One shared decision engine, three applications:
 | Intake | A case is opened with the facts that matter | A supplier price rise (DairyCo cream +50%) | Three conflicting versions of one recipe | A transcript with factual claims |
 | Evidence | The facts are checked against something verifiable | Deterministic dish maths: cost/serving, food-cost %, margin, monthly/annual impact | The versions, side by side, with their differences | Rule-based claim extraction (facts separated from opinion), each claim linked to evidence |
 | Conflict | The disagreement is made explicit | The supplier's $0.24 vs the owner's mandate (target $0.16, max $0.20, walk away above $0.20) | The conflict table (salt, fat, simmer time) + blind ratings | The guest's challenge vs the transcript |
-| Proposal | An option is priced, tested, or corrected | Six strategies; the supplier's $0.19 counter is priced against the same maths | The tally, revealed only when all ratings are in | The verification agent's evaluation |
+| Proposal | An option is priced, tested, or corrected | Six strategies; the supplier's $0.18 counter is priced against the same maths | The tally, revealed only when all ratings are in | The verification agent's evaluation |
 | Human approval | A person — never an agent — decides | The owner approves in the Mattermost room | A human approves the canonical recipe | The host approves the correction |
-| Audited resolution | The outcome is filed and can be re-checked | The agreed $0.19 is recorded and re-checked next month | The canonical recipe is recorded with the dissent preserved | The errata is published with the original preserved |
+| Audited resolution | The outcome is filed and can be re-checked | The agreed $0.18 is recorded and re-checked next month | The canonical recipe is recorded with the dissent preserved | The errata is published with the original preserved |
 
 The product is the engine. The workflows are proof that it generalises. That is the positioning, and it is the only honest one: **CONVERGE is a shared decision-resolution engine with three applications, not one commercial product with one buyer.**
 
@@ -69,7 +69,7 @@ What is hard to copy is the **assembled workflow in a real Switch room**: the hu
 - **Their current solution:** a phone call or WhatsApp with the supplier, a spreadsheet (or gut feel), and memory.
 - **The frustration:** they cannot answer "what does +50% on cream cost me?" without doing the maths by hand, and they cannot prove what was agreed a month later.
 - **What CONVERGE saves:** the maths (cream/serving $0.96 → $1.44; food cost 28.63% → 31.62%; monthly extra $76.80), the negotiation position (a priced counter with a walk-away), and the record (the agreed price, filed).
-- **Measurable benefit (demo numbers):** the supplier's $0.19 counter, accepted, saves **$48.00/month** versus accepting $0.24 — $576/year — and keeps food cost at 29.75% instead of 31.62%. More generally, knowing the max sustainable price ($0.1967 at a 30% target) prevents accepting a price that silently kills margin.
+- **Measurable benefit (demo numbers):** the supplier's $0.18 counter, accepted, saves **$57.60/month** versus accepting $0.24 — $691.20/year — and keeps food cost at 29.38% instead of 31.62%. More generally, knowing the max sustainable price ($0.1967 at a 30% target) prevents accepting a price that silently kills margin.
 - **Why trust an AI-assisted negotiation:** the AI never invents money (deterministic engine), the owner sets the mandate (target $0.16, max $0.20, walk away above $0.20), and only the owner can approve. The AI proposes; the human decides.
 - **Why pay:** one avoided bad acceptance pays for months of a tool. PlateSense and Marji charge $59/location/mo for the maths alone; CONVERGE adds the negotiation, the approval, and the record. (No CONVERGE price is set — this is a value argument, not a pricing claim.)
 
@@ -110,11 +110,11 @@ Scored out of 50 on a stated rubric, not the hackathon's (no official numerical 
 
 | Criterion (10 each) | Score | Reasoning |
 |---|---|---|
-| Problem & business value | 7 | A real problem, quantified benefit ($48/mo saved in the demo, margin preserved). Deducted: the supplier is fictional and there are no real users yet. |
+| Problem & business value | 7 | A real problem, quantified benefit ($57.60/mo saved in the demo, margin preserved). Deducted: the supplier is fictional and there are no real users yet. |
 | Switch centrality & collaboration | 8 | Live, verified integration; the approval genuinely happens in chat. Deducted: the stub fallback exists, and the drawer shows app-stored messages only (full history is in Mattermost). |
-| Technical quality | 8 | 161/161 tests, axe-core 0 violations on 13 pages, deterministic engine, security hardened. Deducted: no live XSS probe (blocked by a platform safety filter, documented, not retried), no usability sessions. |
+| Technical quality | 8 | 294/294 tests (verified 2026-11-07), axe-core 0 violations on 13 pages, deterministic engine, security hardened (P0 2026-11-07: session-token auth on every POST, atomic save with backup rotation, proposal versioning with content hash + 7-day expiry + idempotent re-approve, derived strategy prices, WITHDRAWN/EXPIRED states). Deducted: no live XSS probe (blocked by a platform safety filter, documented, not retried), no usability sessions. |
 | Novelty & differentiation | 7 | The combination is genuinely unoccupied in our research (verified, two passes); COURT's mechanism is the strongest differentiator. Deducted: every component exists somewhere, and the assembly claim is weaker than a first-ever claim. |
-| Demo, evidence & presentation | 8 | A real demo video, 48 screenshots, a QA report, and an evidence package. Deducted: the video has two documented stale frames (see §7). |
+| Demo, evidence & presentation | 8 | A real demo video, 48 screenshots, a QA report, and an evidence package. Deducted: the video has three documented stale elements (see §7). |
 | **Total** | **38 / 50** | A strong, honest submission. Not a 45+ submission — that would need real users and usability evidence. |
 
 **What would genuinely raise the score:** real users running the HAGGLE flow (5–8 participants, documented), an independent evaluation of the Copilot/Court outputs, and a re-recorded demo video. **What would not:** more features, a UI redesign, or a bigger claim. The product is complete enough for the demo; the gap is evidence, not code.
@@ -130,7 +130,7 @@ Scored out of 50 on a stated rubric, not the hackathon's (no official numerical 
 ## 6. Remaining risks
 
 1. **No real users or usability sessions.** The biggest gap. Nothing in this pass fixes it (that would need real participants, not more writing).
-2. **The demo video's two stale frames** (see §7). Disclosed in the demo script and the README; a judge who watches the video may still notice the "Pending" line on the completed case.
+2. **The demo video's three stale elements** (see §7). Disclosed in the demo script and the README; a judge who watches the video may still notice the "Pending" line on the completed case.
 3. **The XSS live probe is outstanding.** Static review is complete and regression tests exist, but the live probe was blocked by a platform safety filter and was not retried. Documented as a limitation, not hidden.
 4. **The stub fallback could be misread.** A sceptical judge could read "SIMULATED-STUB" as "Switch is optional". The README frames it as a fallback and states what is lost without the room.
 5. **First-stack room timelines were lost** in the overnight VM replacement. The approval record survives in the app's audit trail and in the evidence screenshots; the current rooms carry a record note. Disclosed, not re-staged.
@@ -139,16 +139,18 @@ Scored out of 50 on a stated rubric, not the hackathon's (no official numerical 
 
 ## 7. Demo video — recommendation: retain
 
-The video (`submission/demo/converge-demo.mp4`, 2:28, recorded 2026-11-06) shows the real app, the real first-stack rooms, and the real HAG-014 approval. It has two documented stale frames:
+The video (`submission/demo/converge-demo.mp4`, 2:28, recorded 2026-11-06) shows the real app, the real first-stack rooms, and the real HAG-014 approval. It has four documented stale elements (three from the 2026-11-06 record, plus one added by the 2026-11-07 dark redesign):
 
 1. The HAG-014 overview shows a stale "Pending: $0.19/fl oz for 6 weeks" line above the APPROVED stamp (recorded before the H1 fix; the live app no longer shows it).
 2. The room timelines shown are the first stack's (lost to the VM replacement; current rooms carry a record note).
+3. The counter figure shown ($0.19) is now $0.18 — the engine derives strategy prices from the case input (P0, 2026-11-07), so the video's $0.19 is out of date.
+4. The video shows the old **light** Direction B UI. The live app is now the dark charcoal/cyan/lime redesign (2026-11-07). It also predates the Submit for approval flow (GAP-2) — the live app has it, the video does not show it.
 
 **Recommendation: retain the original recording. Do not re-record, do not edit it.**
 
 - Re-recording is not feasible without losing the burned-in section titles — the title burn-in step was never scripted, so a re-record would come out without them.
 - A minimal correction (a title card at the start) would not fix the mid-video "Pending" frame, and editing a recording to hide a stale frame would be worse than disclosing it.
-- The staleness is disclosed in writing (demo script §9 and the README's submission section), which is the honest handling. The video's value — the real app, the real rooms, the real approval — outweighs two disclosed stale frames.
+- The staleness is disclosed in writing (demo script §9 and the README's submission section), which is the honest handling. The video's value — the real app, the real rooms, the real approval — outweighs three disclosed stale elements.
 - **The original must not be destroyed.** Any future re-record is a new file, never an overwrite.
 
 ## 8. What was not done in this pass

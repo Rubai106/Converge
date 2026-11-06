@@ -57,13 +57,19 @@ const recommendedStrategy = new Function(
   `${extract(/function recommendedStrategy\([\s\S]*?\n\}/, 'recommendedStrategy')}\nreturn recommendedStrategy;`,
 )();
 const haggleNextStep = new Function(
-  `${consts}\n${extract(/const STRATEGY_TERMS = \{[\s\S]*?\n\};/, 'STRATEGY_TERMS')}\n${extract(/function termsForStrategy\([\s\S]*?\n\}/, 'termsForStrategy')}\n${extract(/function recommendedStrategy\([\s\S]*?\n\}/, 'recommendedStrategy')}\n${extract(/function haggleNextStep\([\s\S]*?\n\}/, 'haggleNextStep')}\nreturn haggleNextStep;`,
+  // P0 (2026-11-07): the hardcoded STRATEGY_TERMS table is gone —
+  // haggleNextStep never used terms anyway (only the strategy name +
+  // recommendation note), so no terms extraction is needed here.
+  `${consts}\n${extract(/function recommendedStrategy\([\s\S]*?\n\}/, 'recommendedStrategy')}\n${extract(/function haggleNextStep\([\s\S]*?\n\}/, 'haggleNextStep')}\nreturn haggleNextStep;`,
 )();
 const moveOptions = new Function(
   `${extract(/const TRANSITIONS = \{[\s\S]*?\n\};/, 'TRANSITIONS')}\n${extract(/function moveOptions\([\s\S]*?\n\}/, 'moveOptions')}\nreturn moveOptions;`,
 )();
 const moveLabel = new Function(
-  `${extract(/const MOVE_LABELS = \{[^}]+\};/, 'MOVE_LABELS')}\n${extract(/function moveLabel\([\s\S]*?\n\}/, 'moveLabel')}\nreturn moveLabel;`,
+  // P0 (2026-11-07): moveLabel is direction-aware now — it reads the
+  // STATE_ORDER position of `from` and `to`, so the extractor pulls
+  // STATE_ORDER instead of the old static MOVE_LABELS table.
+  `${extract(/const STATE_ORDER = \[[^\]]+\];/, 'STATE_ORDER')}\n${extract(/function moveLabel\([\s\S]*?\n\}/, 'moveLabel')}\nreturn moveLabel;`,
 )();
 
 // ---------- bulletPositions: bounded, off-scale flagged ----------
@@ -141,15 +147,22 @@ test('recommendation: HAG-014 recommends the freeze (in mandate, under target)',
 });
 
 test('recommendation: when the cheapest option misses the target, the next in-mandate one wins', () => {
-  // Old food cost 30.13% > 30% target, so the freeze misses; the $0.19
-  // counter lands at 29.75% and is in mandate.
+  // Old food cost 30.13% > 30% target, so the freeze misses; the $0.18
+  // counter lands at 29.38% and is in mandate.
   const input = { supplier: 'DairyCo', ingredient: 'heavy cream', recipe: 'Alfredo', oldPrice: 0.20, newPrice: 0.24, unit: 'fl oz', qtyPerServing: 6, otherIngredientsCostPerServing: 3.62, menuPrice: 16, monthlySales: 160, targetFoodCostPct: 30, targetPrice: 0.16, maxApprovedPrice: 0.20 };
   const c = hagCase({ input });
   assert.equal(recommendedStrategy(c).id, 'counter-019');
 });
 
 test('recommendation: no in-mandate strategy means no recommendation', () => {
-  const c = hagCase({ input: { ...hagCase().input, maxApprovedPrice: 0.10 } });
+  // P0 (2026-11-07): the derived counter is the midpoint of target and
+  // max-approved, capped at max-approved — so a real case always has at
+  // least one in-mandate strategy (the counter and the gradual both land
+  // at or below the ceiling by construction). The old scenario (a
+  // maxApprovedPrice below every hardcoded price) can no longer occur.
+  // No recommendation only happens when there are no strategies at all.
+  const c = hagCase();
+  c.strategies = [];
   assert.equal(recommendedStrategy(c), null);
 });
 
@@ -181,6 +194,18 @@ test('move: DISCUSSION offers no PROPOSAL; labels are plain words', () => {
   assert.equal(moveLabel('COMPLETED'), 'Mark as completed');
 });
 
+test('move: labels are direction-aware (M10)', () => {
+  // Forward moves say "Move to …"; backward moves keep "Back to …".
+  assert.equal(moveLabel('INTAKE', 'DRAFT'), 'Move to Intake');
+  assert.equal(moveLabel('INVESTIGATING', 'INTAKE'), 'Move to Investigating');
+  assert.equal(moveLabel('DISCUSSION', 'INVESTIGATING'), 'Move to Discussion');
+  assert.equal(moveLabel('INTAKE', 'DISCUSSION'), 'Back to Intake');
+  assert.equal(moveLabel('INVESTIGATING', 'DISCUSSION'), 'Back to Investigating');
+  // Housekeeping moves are direction-free.
+  assert.equal(moveLabel('BLOCKED', 'DISCUSSION'), 'Mark as blocked');
+  assert.equal(moveLabel('CANCELLED', 'DRAFT'), 'Cancel case');
+});
+
 // ---------- placement: chart in Analysis, key figures + Next step in Overview ----------
 test('placement: the Overview keeps key figures and Next step, not the chart', () => {
   const summary = fnBody('haggleSummary');
@@ -203,7 +228,7 @@ test('placement: the Overview keeps key figures and Next step, not the chart', (
 test('placement: the header has one primary action; the rail hides an empty Approvals panel', () => {
   const render = fnBody('renderCase');
   assert.ok(render.includes('casePrimaryAction(c)'), 'the header must use the primary action');
-  assert.ok(render.includes('moveLabel(t)'), 'Move options must use plain labels');
+  assert.ok(render.includes('moveLabel(t, c.state)'), 'Move options must use direction-aware plain labels');
   const rail = fnBody('railPanels');
   assert.ok(rail.includes("(c.pendingApproval || c.approval || c.rejectedTerms) ?"), 'Approvals must render only when there is something to show');
   assert.ok(!rail.includes('No pending approval on this case'), 'the empty Approvals panel must be gone');
@@ -227,11 +252,11 @@ test('css: the bullet cannot escape its track; the new panels are styled', () =>
   assert.ok(css.includes('.next-step-panel'), 'the Next step panel must be styled');
   assert.ok(css.includes('.warn-box'), 'the warning box must be styled');
   assert.ok(css.includes('.link-btn'), 'the text link must be styled');
-  // The new panels use solid colours from the existing palette (the
-  // only linear-gradients in the file are the pre-existing table
-  // scroll shadows).
-  assert.ok(css.includes('.next-step-panel{background:var(--teal-bg)'), 'the Next step panel must use the solid teal tint');
-  assert.ok(css.includes('.warn-box{border:1px solid #E3D3A8;background:#FDF8E7'), 'the warning box must use the solid amber treatment');
+  // The new panels use solid colours from the dark palette (the only
+  // linear-gradients in the file are the pre-existing table scroll
+  // shadows).
+  assert.ok(css.includes('.next-step-panel{background:var(--cyan-bg)'), 'the Next step panel must use the solid cyan tint');
+  assert.ok(css.includes('.warn-box{border:1px solid var(--warn-border);background:var(--warn-bg)'), 'the warning box must use the solid amber treatment');
 });
 
 test('docs: README names Playwright as a devDependency and separates STUB from REAL', () => {

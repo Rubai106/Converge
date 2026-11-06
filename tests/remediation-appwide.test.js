@@ -77,9 +77,10 @@ test('M12: evidence tags are qualified per case and the case title is shown', ()
   assert.ok(src.includes('e.caseTitle'), 'case title next to the evidence case id missing');
 });
 
-test('L1: the demo identity is labelled as fixed with no sign-in', () => {
-  assert.ok(html.includes('Demo identity — Mara (owner). No sign-in; every visitor sees the same identity'), 'header chip tooltip missing');
-  assert.ok(src.includes('No sign-in; every visitor sees the same identity'), 'Environment identity note missing');
+test('L1: the session identity is labelled (P0 2026-11-07: sessions replaced the fixed demo identity)', () => {
+  assert.ok(html.includes('Signed-in identity from the session — Mara (owner).'), 'header chip tooltip missing');
+  assert.ok(src.includes('Session identity — Mara (owner). The server issues a session on load'), 'Environment identity note missing');
+  assert.ok(!src.includes('No sign-in; every visitor sees the same identity'), 'the old no-sign-in copy must be gone');
   assert.ok(!src.includes('Signed in as the case owner'), 'old sign-in tooltip still present');
 });
 

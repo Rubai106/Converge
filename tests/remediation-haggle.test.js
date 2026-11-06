@@ -114,7 +114,7 @@ test('H8: renderCase builds the dropdown from moveOptions, not TRANSITIONS direc
 
 // ---------- H7: modal impact line is computed from engine data ----------
 const strategyImpactLine = new Function(
-  `${extract(/const money = \(n\) => [^;]+;/, 'money')}\n${extract(/const signedMoney = \(n\) => [^;]+;/, 'signedMoney')}\n${extract(/const pct = \(n\) => [^;]+;/, 'pct')}\n${extract(/function strategyImpactLine\(c, s\) \{[\s\S]*?\n\}/, 'strategyImpactLine')}\nreturn strategyImpactLine;`,
+  `${extract(/const money = \(n\) => [^\n]+/, 'money')}\n${extract(/const signedMoney = \(n\) => [^\n]+/, 'signedMoney')}\n${extract(/const pct = \(n\) => [^\n]+/, 'pct')}\n${extract(/function strategyImpactLine\(c, s\) \{[\s\S]*?\n\}/, 'strategyImpactLine')}\nreturn strategyImpactLine;`,
 )();
 function impactCase(unitPrice = 0.19) {
   return {
@@ -191,8 +191,8 @@ test('M17: the timeline labels the pre-approval row as a pending decision, not A
 // ---------- M18: Completed step + visible Mark completed action ----------
 test('M18: the stepper has a Completed step after Approved', () => {
   assert.ok(src.includes("'Approved', 'Completed'"), 'STEPS must end Approved → Completed');
-  assert.ok(src.includes('COMPLETED: 6'), 'STEP_INDEX must map COMPLETED to the new step');
-  assert.ok(src.includes('APPROVED: 5'), 'STEP_INDEX must keep APPROVED at its step');
+  assert.ok(src.includes('COMPLETED: 7'), 'STEP_INDEX must map COMPLETED to the new step');
+  assert.ok(src.includes('APPROVED: 6'), 'STEP_INDEX must keep APPROVED at its step');
 });
 
 test('M18: an approved case offers a visible Mark completed action (no new gate)', () => {

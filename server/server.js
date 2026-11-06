@@ -9,10 +9,11 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { haggleAnalysis, haggleStrategies, normalizeHaggleInputs, courtConflicts, courtTally, extractClaims, claimEvidenceRefs, setClaimStatus, transitionCase, audit, canTransition, adoptCanonical } from './engine.js';
+import { randomUUID } from 'node:crypto';
+import { haggleAnalysis, haggleStrategies, normalizeHaggleInputs, courtConflicts, courtTally, extractClaims, claimEvidenceRefs, setClaimStatus, transitionCase, audit, canTransition, adoptCanonical, expirePendingApproval, proposalInputHash, proposalContentHash } from './engine.js';
 import { load, save, getCase } from './store.js';
-import { createStubState, stubHealth, stubRegisterAgent, stubGetOps, stubCallOp } from './stub-switch.js';
-import { probeHealth, getOps, callOp, withRoomConnection, registerAgent, agentProfile, switchTimelineToMessages, SWITCH_VERSION } from './switch-client.js';
+import { createStubState, stubHealth, stubGetOps, stubCallOp } from './stub-switch.js';
+import { probeHealth, getOps, callOp, withRoomConnection, switchTimelineToMessages, SWITCH_VERSION } from './switch-client.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 3000);
@@ -145,14 +146,114 @@ function validateHaggleCreation(body) {
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.md': 'text/markdown' };
 
+// ---------- Session-token auth (P0, 2026-11-07) ----------
+// The "human-only" approval gate used to be a client-supplied string
+// (body.actorKind, defaulting to 'human') — any local caller could
+// approve. Now every mutating endpoint (all POST routes) requires a
+// session token issued by POST /api/session. The token is a random
+// UUID held server-side in memory (24h expiry); the actor for every
+// privileged action is derived from the stored session, NEVER from the
+// request body — body.actor / body.actorKind are ignored entirely.
+// The agent runtime never calls /api/session and never holds a token
+// (that is enforced by the runtime, not by this server).
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const SESSION_ACTOR = { name: 'Mara · Owner', kind: 'human' };
+const sessions = new Map(); // token -> { actor, expiresAt }
+function issueSession() {
+  const token = randomUUID();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+  sessions.set(token, { actor: SESSION_ACTOR, expiresAt });
+  return { token, actor: SESSION_ACTOR, expiresAt };
+}
+function getSession(req) {
+  const token = req.headers['x-converge-session'];
+  if (!token || typeof token !== 'string') return null;
+  const s = sessions.get(token);
+  if (!s) return null;
+  if (Date.now() > new Date(s.expiresAt).getTime()) { sessions.delete(token); return null; }
+  return s;
+}
+
+// ---------- Rate limiting: per-IP token bucket (P0, 2026-11-07) ----------
+// Session issuance is capped at 5 per minute per IP; all other POST
+// routes share a 60-per-minute bucket per IP. Buckets are in-memory and
+// per server instance. When empty the server answers 429.
+const buckets = new Map(); // key -> { tokens, updatedAt }
+function takeToken(key, capacity, refillPerMs) {
+  const now = Date.now();
+  let b = buckets.get(key);
+  if (!b) { b = { tokens: capacity, updatedAt: now }; buckets.set(key, b); }
+  b.tokens = Math.min(capacity, b.tokens + (now - b.updatedAt) * refillPerMs);
+  b.updatedAt = now;
+  if (b.tokens < 1) return false;
+  b.tokens -= 1;
+  return true;
+}
+const SESSION_BUCKET = { capacity: 5, refillPerMs: 5 / 60000 };
+const POST_BUCKET = { capacity: 60, refillPerMs: 60 / 60000 };
+
+// ---------- CORS: explicit same-origin policy (P0, 2026-11-07) ----------
+// The app is served by this server, so a browser origin is only ever
+// this server's own origin (localhost or 127.0.0.1 on this PORT).
+// Requests without an Origin (curl, node fetch, server-to-server) are
+// allowed; a present Origin outside the allowed set is refused.
+function allowedOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return null;
+  if (origin === `http://localhost:${PORT}` || origin === `http://127.0.0.1:${PORT}`) return origin;
+  return false;
+}
+function applyCorsHeaders(req, res) {
+  const origin = allowedOrigin(req);
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  return origin;
+}
+
 function send(res, status, body, type = 'application/json') {
-  res.writeHead(status, { 'Content-Type': type });
+  const headers = {
+    'Content-Type': type,
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+  };
+  // CSP for the served app: the app has no inline scripts, inline
+  // styles, or inline event-handler attributes (all handlers are
+  // assigned in app.js), so a strict self-only policy is safe.
+  if (type === 'text/html') {
+    headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+  }
+  res.writeHead(status, headers);
   res.end(typeof body === 'string' ? body : JSON.stringify(body, null, 2));
 }
+
+// An error carrying the HTTP status it must be answered with. readBody
+// throws these (413 over the cap, 400 on malformed JSON); the outer
+// catch answers them directly instead of turning them into 500s.
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.statusCode = status;
+  }
+}
+const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
 async function readBody(req) {
-  let s = '';
-  for await (const chunk of req) s += chunk;
-  return s ? JSON.parse(s) : {};
+  let bytes = 0;
+  const chunks = [];
+  for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > MAX_BODY_BYTES) throw new HttpError(413, 'Request body is too large (max 1 MB).');
+    chunks.push(chunk);
+  }
+  const s = Buffer.concat(chunks).toString('utf8');
+  if (!s) return {};
+  try {
+    return JSON.parse(s);
+  } catch {
+    throw new HttpError(400, 'Request body must be valid JSON.');
+  }
 }
 
 // ---------- public case view (COURT blindness) ----------
@@ -179,6 +280,45 @@ function publicCaseView(c) {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   try {
+    // CORS preflight: answered without auth, only for an allowed origin.
+    if (req.method === 'OPTIONS') {
+      const origin = applyCorsHeaders(req, res);
+      if (origin) {
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Converge-Session');
+        res.setHeader('Access-Control-Max-Age', '600');
+      }
+      res.writeHead(204);
+      return res.end();
+    }
+    applyCorsHeaders(req, res);
+    // Same-origin policy for state-changing requests: a present Origin
+    // outside this server's own origin is refused outright (the
+    // X-Converge-Session header already forces a preflight for browsers,
+    // so this is defence in depth, not the only control).
+    if (req.method === 'POST' && allowedOrigin(req) === false) {
+      return send(res, 403, { error: 'Cross-origin requests are not allowed.' });
+    }
+    // Session issuance: rate-limited, no token required (it issues one).
+    if (url.pathname === '/api/session' && req.method === 'POST') {
+      const ip = req.socket.remoteAddress || 'unknown';
+      if (!takeToken(`${ip}:session`, SESSION_BUCKET.capacity, SESSION_BUCKET.refillPerMs)) {
+        return send(res, 429, { error: 'Too many session requests — try again in a minute.' });
+      }
+      return send(res, 200, issueSession());
+    }
+    // Every other POST route requires a valid, unexpired session token.
+    if (req.method === 'POST') {
+      const ip = req.socket.remoteAddress || 'unknown';
+      if (!takeToken(`${ip}:post`, POST_BUCKET.capacity, POST_BUCKET.refillPerMs)) {
+        return send(res, 429, { error: 'Too many requests — slow down and try again.' });
+      }
+      const session = getSession(req);
+      if (!session) {
+        return send(res, 401, { error: 'A valid session token is required — POST /api/session and send the token as the X-Converge-Session header.' });
+      }
+      req.session = session;
+    }
     // --- static app ---
     if (url.pathname === '/' || url.pathname.startsWith('/app/')) {
       const p = url.pathname === '/' ? '/app/index.html' : url.pathname;
@@ -187,7 +327,13 @@ const server = createServer(async (req, res) => {
       return send(res, 404, { error: 'not found' });
     }
     // --- API: cases ---
-    if (url.pathname === '/api/cases' && req.method === 'GET') return send(res, 200, data.cases.map(publicCaseView));
+    if (url.pathname === '/api/cases' && req.method === 'GET') {
+      // A stale pending proposal expires on read, with an audit event.
+      let changed = false;
+      for (const c of data.cases) if (expirePendingApproval(c)) changed = true;
+      if (changed) save(data);
+      return send(res, 200, data.cases.map(publicCaseView));
+    }
     // --- API: guided HAGGLE case creation (no LLM money maths) ---
     if (url.pathname === '/api/cases/preview' && req.method === 'POST') {
       const body = await readBody(req);
@@ -220,7 +366,7 @@ const server = createServer(async (req, res) => {
           ? [{ id: 'E1', type: 'source', source: evidenceSource, status: 'Unverified', note: 'Source provided at case creation; not verified.' }]
           : [],
       };
-      audit(c, { name: 'Owner', kind: 'human' }, 'case-created', { supplier: input.supplier, ingredient: input.ingredient });
+      audit(c, req.session.actor, 'case-created', { supplier: input.supplier, ingredient: input.ingredient });
       data.cases.push(c);
       // Room creation must never fail the case: a room failure is
       // reported as roomError on the 201 response, and the case stands.
@@ -256,6 +402,8 @@ const server = createServer(async (req, res) => {
     if (caseMatch && req.method === 'GET') {
       const c = getCase(data, caseMatch[1]);
       if (!c) return send(res, 404, { error: 'case not found' });
+      // A stale pending proposal expires on read, with an audit event.
+      if (expirePendingApproval(c)) save(data);
       const out = { ...c };
       if (c.workflow === 'HAGGLE') { out.analysis = haggleAnalysis(c.input); out.strategies = haggleStrategies(out.analysis, c.input); }
       if (c.workflow === 'COURT') {
@@ -286,12 +434,27 @@ const server = createServer(async (req, res) => {
       return send(res, 200, out);
     }
     // --- API: transition / approve (human only for APPROVED) ---
+    // The actor is the session actor — body.actor / body.actorKind are
+    // ignored entirely (P0: the old self-asserted gate defaulted to
+    // human). A proposal submission creates a versioned proposal record
+    // with a content hash; the approval binds to it and is rejected if
+    // the hash does not match.
     const transMatch = url.pathname.match(/^\/api\/cases\/([\w-]+)\/transition$/);
     if (transMatch && req.method === 'POST') {
       const c = getCase(data, transMatch[1]);
       if (!c) return send(res, 404, { error: 'case not found' });
       const body = await readBody(req);
-      const actor = { name: body.actor || 'Owner', kind: body.actorKind || 'human' };
+      const actor = req.session.actor;
+      // A stale pending proposal expires before anything acts on it.
+      if (expirePendingApproval(c)) save(data);
+      // Idempotent re-approve: a retried approve after success returns
+      // the existing approval (200) instead of 400 — the client cannot
+      // otherwise tell "already approved" from "never submitted".
+      if (body.to === 'APPROVED' && !c.pendingApproval && c.approval && body.proposalId
+        && c.approval.proposalId === body.proposalId
+        && (body.version === undefined || Number(body.version) === c.approval.version)) {
+        return send(res, 200, c);
+      }
       // GAP-1 (2026-11-06): entering AWAITING_APPROVAL without a proposal
       // strands the case — no pendingApproval, so no Approve/Reject
       // buttons and no path forward. The ONLY way in is the approval
@@ -307,12 +470,15 @@ const server = createServer(async (req, res) => {
       if (body.to === 'AWAITING_APPROVAL' && c.pendingApproval) {
         return send(res, 400, { error: 'A proposal is already pending for this case — approve or reject it before submitting another.' });
       }
-      // GAP-2: a proposalId must name a real strategy for this HAGGLE
-      // case. Proposal IDs are P-numbers, positional in the engine's
-      // strategy order (P1 = first strategy, …); a strategy id, a
-      // P-number beyond the case's strategies, or a malformed id is
-      // rejected. Non-HAGGLE cases carry no strategies, so the check
-      // is HAGGLE-only and their existing behaviour is unchanged.
+      // Resolve the strategy for a HAGGLE proposal and build its
+      // versioned record (GAP-2 validation + hash binding). A
+      // proposalId must name a real strategy for this HAGGLE case:
+      // P-numbers are positional in the engine's strategy order (P1 =
+      // first strategy, …); a strategy id, a P-number beyond the
+      // case's strategies, or a malformed id is rejected. Non-HAGGLE
+      // cases carry no strategies, so the record is HAGGLE-only and
+      // their existing behaviour is unchanged.
+      let proposalRecord = null;
       if (body.to === 'AWAITING_APPROVAL' && c.workflow === 'HAGGLE') {
         let strategies;
         try {
@@ -324,10 +490,39 @@ const server = createServer(async (req, res) => {
         if (!m || Number(m[1]) > strategies.length) {
           return send(res, 400, { error: `Unknown proposal ${body.proposalId} — submit a proposal for one of this case's strategies (P1–P${strategies.length}).` });
         }
+        const strategy = strategies[Number(m[1]) - 1];
+        // Canonical terms, derived from the strategy — never the
+        // client-supplied free text (the old flow stored body.terms
+        // unvalidated, so an approval could record terms never
+        // proposed). Same format the client computes: money(unitPrice)
+        // + ' / ' + unit + ' for ' + duration.
+        const terms = `$${strategy.unitPrice.toFixed(2)} / ${c.input.unit} for ${strategy.duration}`;
+        const inputHash = proposalInputHash(c.input, strategy);
+        const version = (c.proposals || [])
+          .filter((p) => p.id === body.proposalId && typeof p.version === 'number')
+          .reduce((max, p) => Math.max(max, p.version), 0) + 1;
+        const now = new Date().toISOString();
+        proposalRecord = {
+          id: body.proposalId, version, strategyId: strategy.id, terms,
+          inputHash, createdAt: now, requestedAt: now,
+        };
+        proposalRecord.contentHash = proposalContentHash(proposalRecord);
       }
       try {
         transitionCase(c, body.to, actor);
-        if (body.to === 'AWAITING_APPROVAL' && body.proposalId) c.pendingApproval = { proposalId: body.proposalId, terms: body.terms || '', requestedBy: actor.name };
+        if (body.to === 'AWAITING_APPROVAL' && body.proposalId) {
+          if (proposalRecord) {
+            c.proposals = c.proposals || [];
+            c.proposals.push(proposalRecord);
+            c.pendingApproval = {
+              proposalId: proposalRecord.id, version: proposalRecord.version,
+              contentHash: proposalRecord.contentHash, terms: proposalRecord.terms,
+              requestedBy: actor.name, requestedAt: proposalRecord.requestedAt,
+            };
+          } else {
+            c.pendingApproval = { proposalId: body.proposalId, terms: body.terms || '', requestedBy: actor.name, requestedAt: new Date().toISOString() };
+          }
+        }
         save(data);
         return send(res, 200, c);
       } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
@@ -350,7 +545,7 @@ const server = createServer(async (req, res) => {
         return send(res, 409, { error: `${body.reader} already rated ${body.sampleCode}` });
       }
       c.ratings.push({ reader: body.reader, sampleCode: body.sampleCode, scores: body.scores });
-      audit(c, { name: body.reader, kind: 'human' }, 'court-rating', { sampleCode: body.sampleCode });
+      audit(c, req.session.actor, 'court-rating', { sampleCode: body.sampleCode, reader: body.reader });
       save(data);
       const expected = readers.length * samples.length;
       const complete = c.ratings.length >= expected;
@@ -364,7 +559,8 @@ const server = createServer(async (req, res) => {
     // blind mapping stays server-held until the tally completes.
     if (url.pathname === '/api/court/version' && req.method === 'POST') {
       const body = await readBody(req);
-      if (body.actorKind !== 'human') return send(res, 400, { error: 'Only a human may submit a version.' });
+      // Human-only: the session actor is always human (the agent runtime
+      // never holds a session token), so no body.actorKind check remains.
       const c = getCase(data, body.caseId);
       if (!c || c.workflow !== 'COURT') return send(res, 404, { error: 'COURT case not found' });
       const author = typeof body.author === 'string' ? body.author.trim() : '';
@@ -391,18 +587,18 @@ const server = createServer(async (req, res) => {
       const sampleCode = `S${(c.samples || []).length + 1}`;
       c.samples = c.samples || [];
       c.samples.push({ code: sampleCode, version: id });
-      audit(c, { name: body.actor || 'Facilitator', kind: 'human' }, 'court-version-added', { version: id, sampleCode, author });
+      audit(c, req.session.actor, 'court-version-added', { version: id, sampleCode, author });
       save(data);
       const expected = (c.readers?.length || 0) * c.samples.length;
       return send(res, 201, { caseId: c.id, version, sampleCode, samples: c.samples.map((s) => ({ code: s.code })), ratingsExpected: expected });
     }
     if (url.pathname === '/api/court/adopt' && req.method === 'POST') {
       const body = await readBody(req);
-      if (body.actorKind !== 'human') return send(res, 400, { error: 'Only a human may adopt a canonical version.' });
+      // Human-only: the session actor is always human (see /api/court/version).
       const c = getCase(data, body.caseId);
       if (!c || c.workflow !== 'COURT') return send(res, 404, { error: 'COURT case not found' });
       try {
-        const adoption = adoptCanonical(c, body.version || null, { name: body.actor || 'Mara (owner)', kind: 'human' });
+        const adoption = adoptCanonical(c, body.version || null, req.session.actor);
         save(data);
         return send(res, 200, { caseId: c.id, canonicalVersion: c.canonicalVersion, adoption });
       } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
@@ -433,7 +629,9 @@ const server = createServer(async (req, res) => {
       if (!base) return send(res, 404, { error: `Claim ${body.id} not found` });
       const claim = { ...base, status: c.claimStatuses?.[base.id] || base.status };
       try {
-        setClaimStatus(claim, body.status, { kind: body.actorKind || 'human', name: body.actor || 'Host' });
+        // Human-only: the session actor is always human; body.actor /
+        // body.actorKind are ignored entirely.
+        setClaimStatus(claim, body.status, req.session.actor);
         c.claimStatuses = c.claimStatuses || {};
         c.claimStatuses[base.id] = claim.status;
         if (body.challenge) {
@@ -446,11 +644,18 @@ const server = createServer(async (req, res) => {
             c.claimChallengeHistory = c.claimChallengeHistory || {};
             (c.claimChallengeHistory[base.id] = c.claimChallengeHistory[base.id] || []).push(prev);
           }
-          c.claimChallenges[base.id] = { text: body.challenge.text || '', evidence: body.challenge.evidence || null, by: body.actor || 'Guest' };
+          // The challenge is submitted AS the episode guest (the "Submit
+          // challenge as guest" form) — its attribution is the guest
+          // participant recorded on the case, not the session actor
+          // operating the UI (the audit event still records the session
+          // actor). Falls back to the session actor if the case has no
+          // guest participant.
+          const guest = (c.participants || []).find((p) => p.role === 'guest');
+          c.claimChallenges[base.id] = { text: body.challenge.text || '', evidence: body.challenge.evidence || null, by: guest?.name || req.session.actor.name };
           claim.guestChallenge = c.claimChallenges[base.id];
           if (c.claimChallengeHistory?.[base.id]?.length) claim.challengeHistory = c.claimChallengeHistory[base.id];
         }
-        audit(c, { name: body.actor || 'Host', kind: body.actorKind || 'human' }, 'claim-status', { claim: base.id, status: claim.status });
+        audit(c, req.session.actor, 'claim-status', { claim: base.id, status: claim.status });
         save(data);
         return send(res, 200, claim);
       } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
@@ -512,35 +717,40 @@ const server = createServer(async (req, res) => {
       if (!text) return send(res, 400, { error: 'Message text is required.' });
       if (text.length > 4000) return send(res, 400, { error: 'Message is too long (max 4000 characters).' });
       body.text = text;
+      // The message author is the session actor — never a client-supplied
+      // name (the old code derived "agent" kind by regex on the author
+      // string, so anyone could post as an agent).
+      body.author = req.session.actor.name;
       if (realSwitch) {
         const roomId = await ensureRealRoom(c);
         const result = await withRoomConnection(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, roomId, async (connectionId) => {
           return callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'post_message', { body: body.text }, connectionId);
         });
         const eventId = result.result?.event_id || null;
-        const author = body.author || 'Mara (owner)';
-        const kind = /agent/i.test(author) ? 'agent' : 'human';
-        const msg = { id: eventId || `real-${Date.now()}`, author, kind, text: body.text, at: new Date().toISOString(), room: c.switchRoom, roomId, eventId, real: true };
+        const author = body.author;
+        const kind = 'human';
+        const msg = { id: eventId || `real-${randomUUID()}`, author, kind, text: body.text, at: new Date().toISOString(), room: c.switchRoom, roomId, eventId, real: true };
         c.messages.push(msg);
-        audit(c, { name: author, kind }, 'room-message', { room: c.switchRoom, roomId, eventId });
+        audit(c, req.session.actor, 'room-message', { room: c.switchRoom, roomId, eventId });
         save(data);
         return send(res, 200, msg);
       }
       const msg = stubCallOp(stub, 'post_message', body);
-      if (c) { c.messages.push(msg); audit(c, { name: body.author || 'agent', kind: /agent/i.test(body.author || '') ? 'agent' : 'human' }, 'room-message', { room: body.room }); save(data); }
+      if (c) { c.messages.push(msg); audit(c, req.session.actor, 'room-message', { room: body.room }); save(data); }
       return send(res, 200, { ...msg, simulated: true, caption: 'SIMULATED — stub server, not Switch' });
     }
-    if (url.pathname === '/api/switch/register' && req.method === 'POST') {
-      const body = await readBody(req);
-      if (realSwitch) {
-        const profile = agentProfile(body.name || 'converge-facilitator', body.description || 'CONVERGE decision facilitator');
-        return send(res, 200, await registerAgent(SWITCH_BASE_URL, body.registrationKey, profile));
-      }
-      return send(res, 200, { ...stubRegisterAgent(stub, body), simulated: true, caption: 'SIMULATED — stub server, not Switch' });
-    }
+    // /api/switch/register was REMOVED (P0, 2026-11-07): it minted Switch
+    // agent credentials for any unauthenticated caller. Registration is
+    // a one-time ops action via ~/workspace/switch-server/
+    // register-converge-agent.py — it has no place on the public server.
     return send(res, 404, { error: 'not found' });
   } catch (e) {
-    return send(res, 500, { error: String(e.message || e) });
+    // A status-carrying error (readBody 400/413) is answered as-is; any
+    // other failure is logged server-side and answered with a generic
+    // 500 so internals (Switch error text, stack traces) never leak.
+    if (e && typeof e.statusCode === 'number') return send(res, e.statusCode, { error: e.message });
+    console.error('CONVERGE server error:', e);
+    return send(res, 500, { error: 'internal error' });
   }
 });
 

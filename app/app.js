@@ -1,19 +1,23 @@
-// CONVERGE — premium operations workspace (Direction B, elevated).
+// CONVERGE — dark charcoal operations workspace (approved redesign, 2026-11-07).
 // All money/percentages come from the API (deterministic engine). Nothing
 // is hard-coded except labelled demo seed data (COURT blind scores) and
 // static product copy. Switch mode comes from /api/status: REAL-SWITCH
 // when the app is pointed at a live server, SIMULATED-STUB otherwise.
+// Auth: every mutating POST carries the session token issued by
+// POST /api/session (X-Converge-Session header); the server derives the
+// actor from the session — the client never sends body.actor/actorKind.
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const money = (n) => '$' + Number(n).toFixed(2);
+// L10: a missing engine value renders as "—", never "$NaN" / "NaN%".
+const money = (n) => { const v = Number(n); return Number.isFinite(v) ? '$' + v.toFixed(2) : '—'; };
 // A signed delta: '+$0.48' for a cost, '-$0.06' for a saving. money()
 // alone prints '$-0.06' for a negative, so prefixing '+' gave the double
 // sign '+$-0.06' in the approval modal (2026-11-06). Zero reads '+$0.00'.
-const signedMoney = (n) => (Number(n) < 0 ? '-' : '+') + '$' + Math.abs(Number(n)).toFixed(2);
+const signedMoney = (n) => { const v = Number(n); return Number.isFinite(v) ? ((v < 0 ? '-' : '+') + '$' + Math.abs(v).toFixed(2)) : '—'; };
 // Same for a percent delta: '+50%' / '-5%' (never '+-5%').
-const signedPct = (n) => (Number(n) < 0 ? '' : '+') + Number(n);
-const pct = (n) => Number(n).toFixed(2) + '%';
+const signedPct = (n) => { const v = Number(n); return Number.isFinite(v) ? ((v < 0 ? '' : '+') + v) : '—'; };
+const pct = (n) => { const v = Number(n); return Number.isFinite(v) ? v.toFixed(2) + '%' : '—'; };
 const fmtTime = (iso) => { try { return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); } catch { return '—'; } };
 const fmtDateTime = (iso) => { try { return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return '—'; } };
 // Accent-insensitive matching (H2): "ragu" must match "ragù".
@@ -22,8 +26,50 @@ const fmtDateTime = (iso) => { try { return new Date(iso).toLocaleString('en-GB'
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const matchesQuery = (text, q) => !q || norm(text).includes(q);
 
-async function api(path, opts) {
-  const r = await fetch(path, opts);
+// ---------- session auth (P0, 2026-11-07) ----------
+// The server requires a session token on every mutating POST
+// (X-Converge-Session header, issued by POST /api/session, 24h
+// expiry, actor Mara · Owner). The token lives in sessionStorage so a
+// reload reuses it; the actor is derived server-side from the session,
+// never from the request body. A 401 clears the cached token and
+// retries once with a fresh session.
+const SESSION_KEY = 'converge-session-token';
+let sessionToken = null;
+let sessionPromise = null;
+try { sessionToken = sessionStorage.getItem(SESSION_KEY); } catch { /* storage unavailable — session is per-boot */ }
+async function ensureSession() {
+  if (sessionToken) return sessionToken;
+  if (!sessionPromise) {
+    sessionPromise = (async () => {
+      const r = await fetch('/api/session', { method: 'POST' });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `Session request failed (${r.status})`);
+      if (!body.token) throw new Error('Session request did not return a token.');
+      sessionToken = body.token;
+      try { sessionStorage.setItem(SESSION_KEY, sessionToken); } catch { /* ignore */ }
+      if (body.actor?.name) { const chip = document.querySelector('.user-chip'); if (chip) chip.textContent = body.actor.name; }
+      return sessionToken;
+    })();
+    // A failed session attempt must not poison later calls: clear the
+    // shared promise so the next call retries from scratch.
+    sessionPromise.catch(() => { sessionPromise = null; });
+  }
+  return sessionPromise;
+}
+
+async function api(path, opts = {}) {
+  const method = (opts.method || 'GET').toUpperCase();
+  const needsAuth = method !== 'GET' && path !== '/api/session';
+  let headers = { ...(opts.headers || {}) };
+  if (needsAuth) headers['X-Converge-Session'] = await ensureSession();
+  let r = await fetch(path, { ...opts, headers });
+  if (r.status === 401 && needsAuth) {
+    // Token expired or rejected — drop it, get a fresh session, retry once.
+    sessionToken = null;
+    try { sessionStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+    headers = { ...(opts.headers || {}), 'X-Converge-Session': await ensureSession() };
+    r = await fetch(path, { ...opts, headers });
+  }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error || `Request failed (${r.status})`);
   return body;
@@ -38,9 +84,30 @@ const TRANSITIONS = {
   APPROVED: ['COMPLETED', 'BLOCKED'], COMPLETED: [],
   REJECTED: ['DISCUSSION', 'CANCELLED'], BLOCKED: ['INTAKE', 'INVESTIGATING', 'DISCUSSION', 'CANCELLED'], CANCELLED: [],
 };
-const STEPS = ['Draft', 'Investigating', 'Discussion', 'Proposal', 'Awaiting approval', 'Approved', 'Completed'];
-const STEP_INDEX = { DRAFT: 0, INTAKE: 0, INVESTIGATING: 1, DISCUSSION: 2, PROPOSAL: 3, AWAITING_APPROVAL: 4, APPROVED: 5, COMPLETED: 6 };
+const STEPS = ['Draft', 'Intake', 'Investigating', 'Discussion', 'Proposal', 'Awaiting approval', 'Approved', 'Completed'];
+// M9 (2026-11-07): INTAKE is its own step now — DRAFT and INTAKE used
+// to share step 0, so an INTAKE case displayed "Draft" as current.
+// Terminal states have NO entry on purpose: stepperInfo() resolves
+// them from the audit trail (last real step) instead of defaulting
+// to step 0.
+const STEP_INDEX = { DRAFT: 0, INTAKE: 1, INVESTIGATING: 2, DISCUSSION: 3, PROPOSAL: 4, AWAITING_APPROVAL: 5, APPROVED: 6, COMPLETED: 7 };
 const TERMINAL_NEG = ['REJECTED', 'BLOCKED', 'CANCELLED'];
+// The step to highlight for a case, and whether the case is terminal.
+// For a terminal case the highlighted step is the LAST REAL step the
+// case was in before it went terminal (from the audit trail's
+// state:A->B events) — never step 0 — and no step is marked current:
+// the workflow stopped, so nothing is "current". Falls back to null
+// (no highlight) when the audit trail carries no transition into the
+// terminal state. Pure, so the static tests can exercise it directly.
+function stepperInfo(c) {
+  if (!TERMINAL_NEG.includes(c.state)) return { idx: STEP_INDEX[c.state] ?? 0, terminal: null };
+  const events = (c.audit || []).filter((e) => /^state:(\w+)->(\w+)$/.test(e.event));
+  for (let k = events.length - 1; k >= 0; k--) {
+    const m = /^state:(\w+)->(\w+)$/.exec(events[k].event);
+    if (m && TERMINAL_NEG.includes(m[2]) && STEP_INDEX[m[1]] !== undefined) return { idx: STEP_INDEX[m[1]], terminal: c.state };
+  }
+  return { idx: null, terminal: c.state };
+}
 
 // H8 (remediation 2026-11-06): APPROVED and REJECTED are never offered
 // The Move dropdown is for plain state moves only — it never offers a
@@ -63,22 +130,44 @@ const TERMINAL_NEG = ['REJECTED', 'BLOCKED', 'CANCELLED'];
 function moveOptions(state) {
   return (TRANSITIONS[state] || []).filter((t) => t !== 'APPROVED' && t !== 'REJECTED' && t !== 'AWAITING_APPROVAL' && t !== 'PROPOSAL');
 }
-// Plain-words label for a Move-dropdown option — the dropdown offers
-// backward and housekeeping moves only, so every label says what the
-// move does in the user's language, not the state-machine name.
-const MOVE_LABELS = { DISCUSSION: 'Back to Discussion', INVESTIGATING: 'Back to Investigating', INTAKE: 'Back to Intake', BLOCKED: 'Mark as blocked', CANCELLED: 'Cancel case', COMPLETED: 'Mark as completed' };
-function moveLabel(state) { return MOVE_LABELS[state] || `Move to ${state.replace(/_/g, ' ')}`; }
+// Plain-words label for a Move-dropdown option — direction-aware
+// (M10, 2026-11-07): the old static labels said "Back to …" for
+// FORWARD moves (DRAFT → INTAKE offered "Back to Intake"), and the
+// Move dropdown was the only way to advance an early case. A forward
+// move now says "Move to …"; a backward move keeps "Back to …".
+// BLOCKED / CANCELLED / COMPLETED are housekeeping, not directions.
+// Pure, so the static tests can exercise it directly.
+const STATE_ORDER = ['DRAFT', 'INTAKE', 'INVESTIGATING', 'DISCUSSION', 'PROPOSAL', 'AWAITING_APPROVAL', 'APPROVED', 'COMPLETED'];
+function moveLabel(to, from) {
+  if (to === 'BLOCKED') return 'Mark as blocked';
+  if (to === 'CANCELLED') return 'Cancel case';
+  if (to === 'COMPLETED') return 'Mark as completed';
+  const name = to.charAt(0) + to.slice(1).toLowerCase().replace(/_/g, ' ');
+  const fromIdx = STATE_ORDER.indexOf(from);
+  const toIdx = STATE_ORDER.indexOf(to);
+  if (fromIdx >= 0 && toIdx >= 0 && toIdx > fromIdx) return `Move to ${name}`;
+  return `Back to ${name}`;
+}
+// The next forward state for an early case (DRAFT/INTAKE/
+// INVESTIGATING), or null once the case is past setup. The header's
+// "Advance" button uses this — the Move dropdown used to be the only
+// way to advance an early case, and its first option was labelled
+// "Back". Pure.
+function advanceTarget(c) {
+  const idx = STATE_ORDER.indexOf(c.state);
+  if (idx < 0 || idx > 2) return null;
+  const next = STATE_ORDER[idx + 1];
+  return (TRANSITIONS[c.state] || []).includes(next) ? next : null;
+}
 
-// HAGGLE strategy -> approval terms. Terms text is the exact wording the
-// owner signs; the price/duration come from the strategy data itself.
-const STRATEGY_TERMS = {
-  'freeze': { short: '$0.16 / fl oz · 4 weeks', full: '$0.16/fl oz for 4 weeks, with a 25 L/week volume commitment' },
-  'counter-019': { short: '$0.19 / fl oz · 6 weeks', full: '$0.19/fl oz for 6 weeks, in writing' },
-  'volume-021': { short: '$0.21 / fl oz · 25 L/week', full: '$0.21/fl oz with a 25 L/week volume commitment' },
-  'alternative-018': { short: '$0.18 / fl oz · alt. supplier', full: '$0.18/fl oz from the alternative supplier (quality and delivery to be verified before switching)' },
-  'gradual': { short: '$0.20 / fl oz · review 4 wks', full: '$0.20/fl oz now, reviewed in 4 weeks (owner\u2019s max approved price)' },
-  'substitute': { short: 'Trial blend · one dish', full: 'Trial of a lower-cost cream blend on one dish only, with a blind taste test before any menu change' },
-};
+// HAGGLE strategy -> approval terms. Terms text is the exact wording
+// the owner signs; the price/duration/unit come from the strategy data
+// itself, which the server derives from the case input (H5) — never
+// hardcoded. A $4.00/kg case signs "$4.00 / kg for 6 weeks", not
+// "$0.19/fl oz". `s.unit` comes from the strategy payload; the case
+// input unit is the fallback (they agree — the strategy unit is the
+// case unit). A strategy with no duration (e.g. the 'trial'
+// substitution) signs the price alone.
 const PROPOSAL_TO_STRATEGY = { P1: 'freeze', P2: 'counter-019', P3: 'volume-021', P4: 'alternative-018', P5: 'gradual', P6: 'substitute' };
 // GAP-2 (2026-11-06): proposal IDs are P-numbers, positional in the
 // engine's strategy order (haggleStrategies: freeze, counter-019,
@@ -96,8 +185,14 @@ const STRATEGY_TO_PROPOSAL = Object.fromEntries(Object.entries(PROPOSAL_TO_STRAT
 // Pure, so the static tests can exercise it directly.
 function proposalIdForStrategy(strategyId) { return STRATEGY_TO_PROPOSAL[strategyId] || null; }
 // Exact terms text for a strategy (the wording the owner signs).
-// Pure; the fallback matches the inline lookups it replaces.
-function termsForStrategy(s) { return STRATEGY_TERMS[s.id] || { short: money(s.unitPrice) + ' / fl oz', full: money(s.unitPrice) + '/fl oz' }; }
+// Pure; computed from the strategy's own unitPrice/duration/unit and
+// the case's unit — no hardcoded table.
+function termsForStrategy(s, c) {
+  const unit = s.unit || c?.input?.unit || 'fl oz';
+  const price = money(s.unitPrice);
+  if (s.duration) return { short: `${price} / ${unit} · ${s.duration}`, full: `${price} / ${unit} for ${s.duration}` };
+  return { short: `${price} / ${unit}`, full: `${price} / ${unit}` };
+}
 
 // The strategy behind an approval (or a pending approval), from the
 // already-computed deterministic engine data — never invented numbers.
@@ -689,16 +784,21 @@ function renderDashboard() {
   const activity = filteredActivity().slice(0, 6);
   const needsRows = (list, cls = '') => list.map((c) => {
     const d = details[c.id] || c;
+    // M14: the discussion sub-text is per workflow — a HAGGLE case
+    // has strategies to review, a CORRECTION case has claims.
+    const discussSub = c.workflow === 'HAGGLE' ? 'Discussion open — review the strategies'
+      : c.workflow === 'CORRECTION' ? 'Discussion open — review the claims'
+      : 'Discussion open — review the versions and vote';
     const need = c.state === 'AWAITING_APPROVAL'
       ? `Approve ${esc(d.pendingApproval?.terms || 'pending terms')}`
-      : 'Discussion open — review the versions and vote';
+      : discussSub;
     return `<div class="decision-row${cls ? ' ' + cls : ''}"><div><div class="dr-title"><span class="num">${esc(c.id)}</span> — ${esc(c.title)}</div>
       <div class="dr-sub">${need}</div></div>
       <button class="ghost-btn btn-sm" data-open="${esc(c.id)}">${c.state === 'AWAITING_APPROVAL' ? 'Review &amp; approve' : 'Open'}</button></div>`;
   }).join('');
   $('#view').innerHTML = `
     <h1 class="section-title">Overview</h1>
-    <p class="section-sub">One shared decision engine across HAGGLE, COURT and CORRECTION. Humans approve; agents propose, calculate and investigate.</p>
+    <p class="section-sub">One shared decision engine across HAGGLE, COURT and CORRECTION. Humans approve; the engine proposes, calculates and investigates.</p>
     <p><button class="btn" id="new-case-btn">+ New supplier case</button></p>
     <div class="kpis" role="group" aria-label="Key figures">
       <div class="kpi"><small>Active cases</small><b>${k.active}</b><div class="kpi-note">${cases.length} total cases${k.qaExcluded ? ` · ${k.qaExcluded} QA ${k.qaExcluded === 1 ? 'copy' : 'copies'} excluded` : ''}</div></div>
@@ -725,7 +825,7 @@ function renderDashboard() {
     <section class="panel" aria-labelledby="act-h">
       <h2 id="act-h">Recent agent activity</h2>
       ${activity.length ? activity.map((a) => `<div class="activity-item">${activityItemHtml(a)}</div>`).join('') : `<p class="empty">${searchQuery ? `No activity matches “${esc(searchQuery)}”.` : 'No agent activity recorded yet in this demo session.'}</p>`}
-      <p class="small muted" style="margin-top:8px">Derived from case records (proposals, approvals, audit events) — not a live feed.</p>
+      <p class="small muted mt-8">Derived from case records (proposals, approvals, audit events) — not a live feed.</p>
     </section>`;
   $('#new-case-btn').addEventListener('click', openWizard);
   bindCaseRows($('#view'));
@@ -802,16 +902,16 @@ function renderWorkflows() {
   // is highlighted inside its chain.
   const stagesOf = (chain) => chain.split(' → ').map((s) => s.trim());
   const rows = [
-    ['HAGGLE', 'Margin-aware supplier negotiation', 'Draft → Investigating → Discussion → Proposal → Awaiting approval → Approved → Completed', 'HAG-014', 'Negotiation Agent, Financial Analyst'],
-    ['COURT', 'Blind recipe testing and adjudication', 'Intake → Investigating → Discussion → Proposal → Approved', 'CRT-007', 'Facilitator Agent'],
-    ['CORRECTION', 'Evidence-backed factual correction', 'Intake → Investigating → Discussion → Proposal → Approved', 'COR-003', 'Verification Agent'],
+    ['HAGGLE', 'Margin-aware supplier negotiation', 'Draft → Intake → Investigating → Discussion → Proposal → Awaiting approval → Approved → Completed', 'HAG-014', 'Negotiation · Financial analysis'],
+    ['COURT', 'Blind recipe testing and adjudication', 'Intake → Investigating → Discussion → Proposal → Approved', 'CRT-007', 'Facilitation'],
+    ['CORRECTION', 'Evidence-backed factual correction', 'Intake → Investigating → Discussion → Proposal → Approved', 'COR-003', 'Verification'],
   ];
   $('#view').innerHTML = `
     <h1 class="section-title">Workflows</h1>
     <p class="section-sub">Three workflows on one shared decision engine. Same states, same approval gate, same audit trail.</p>
     <section class="panel"><div class="table-wrap"><table>
       <caption>Workflow templates and their demo cases. The highlighted stage is where the demo case sits now.</caption>
-      <thead><tr><th scope="col">Workflow</th><th scope="col">Purpose</th><th scope="col">Stages</th><th scope="col">Demo case</th><th scope="col">Agents</th></tr></thead>
+      <thead><tr><th scope="col">Workflow</th><th scope="col">Purpose</th><th scope="col">Stages</th><th scope="col">Demo case</th><th scope="col">Roles</th></tr></thead>
       <tbody>${rows.map((r) => {
         const demo = cases.find((c) => c.id === r[3]) || details[r[3]];
         const current = demo ? prettyState(demo.state) : null;
@@ -904,9 +1004,9 @@ function renderSettingsView() {
         <dt>Switch health</dt><dd${health.title ? ` title="${esc(health.title)}"` : ''}>${esc(health.text)}</dd>
         <dt>Cases in workspace</dt><dd>${cases.length}</dd>
         <dt>Demo data</dt><dd>Fictional — labelled throughout</dd>
-        <dt>Identity</dt><dd>Demo identity — Mara (owner). No sign-in; every visitor sees the same identity. This is a demo limitation, not production authorization.</dd>
+        <dt>Identity</dt><dd>Session identity — Mara (owner). The server issues a session on load and the actor comes from that session. This is a demo limitation, not production authorization.</dd>
       </dl>
-      <p class="small muted" style="margin-top:10px">Point this app at a real Switch server by setting SWITCH_BASE_URL and a real agent key; the stub is used only while SWITCH_BASE_URL is unset. Keyboard: ⌘K focuses search.</p>
+      <p class="small muted mt-10">Point this app at a real Switch server by setting SWITCH_BASE_URL and a real agent key; the stub is used only while SWITCH_BASE_URL is unset. Keyboard: ⌘K / Ctrl+K focuses search.</p>
     </section>`;
 }
 
@@ -995,7 +1095,7 @@ function wizardReviewStep() {
 }
 function renderCreateWizard() {
   if (!wizard) wizard = newWizard();
-  setBreadcrumb('<span class="crumb-soft">Cases</span><span class="crumb-sep">/</span>New supplier case');
+  setBreadcrumb('<a href="#/cases">Cases</a><span class="crumb-sep">/</span>New supplier case');
   const stepper = WIZARD_STEPS.map((s, i) => {
     const n = i + 1;
     const cls = n < wizard.step ? 'done' : (n === wizard.step ? 'current' : '');
@@ -1012,7 +1112,7 @@ function renderCreateWizard() {
       <form class="rating-form" id="wizard-form" novalidate>
         ${wizardStepFields()}
         ${wizard.createError ? `<p class="inline-error" role="alert">${esc(wizard.createError)}</p>` : ''}
-        <div style="display:flex;gap:8px;flex-wrap:wrap;width:100%">
+        <div class="btn-row">
           ${wizard.step > 1 ? '<button class="ghost-btn" type="button" id="wz-back">← Back</button>' : ''}
           ${isLast
             ? `<button class="btn" type="submit" id="wz-create" ${wizard.creating || wizard.previewLoading || !wizard.preview || (wizardWarnings().length > 0 && !wizard.acknowledged) ? 'disabled' : ''}>Create case</button>`
@@ -1114,16 +1214,26 @@ function casePrimaryAction(c) {
 function renderCase() {
   const c = details[currentCaseId];
   const a = c.analysis;
-  setBreadcrumb(`<span class="crumb-soft">Cases</span><span class="crumb-sep">/</span>${esc(c.id)} — ${esc(c.title)}`);
-  const stepIdx = STEP_INDEX[c.state] ?? 0;
-  const neg = TERMINAL_NEG.includes(c.state);
+  setBreadcrumb(`<a href="#/cases">Cases</a><span class="crumb-sep">/</span>${esc(c.id)} — ${esc(c.title)}`);
+  // M9: the stepper never marks a terminal case "Draft" — stepperInfo
+  // resolves the last real step from the audit trail, and no step is
+  // marked current for a terminal case. The state chip beside the
+  // stepper names the terminal state in plain words.
+  const si = stepperInfo(c);
   const stepper = STEPS.map((s, i) => {
-    const cls = neg && i === stepIdx ? 'blocked' : (i < stepIdx ? 'done' : (i === stepIdx ? 'current' : ''));
-    const cur = i === stepIdx ? ' aria-current="step"' : '';
+    const cls = si.terminal && i === si.idx ? 'done' : (!si.terminal && i < si.idx ? 'done' : (!si.terminal && i === si.idx ? 'current' : ''));
+    const cur = !si.terminal && i === si.idx ? ' aria-current="step"' : '';
     return `<li class="${cls}"${cur}>${s}</li>`;
   }).join('');
+  const terminalChip = si.terminal
+    ? `<p class="stepper-state">${statePill(c.state)}<span>Case ${si.terminal.toLowerCase()} — the workflow stopped${si.idx !== null ? ` at ${STEPS[si.idx]}` : ''}.</span></p>`
+    : '';
   const tabs = [['overview', 'Overview'], ['analysis', 'Analysis'], ['negotiation', 'Negotiation'], ['evidence', 'Evidence'], ['audit', 'Audit']];
   const primary = casePrimaryAction(c);
+  // M10: an early case gets a visible Advance button — the Move
+  // dropdown used to be the only way forward, and its first option
+  // was labelled "Back".
+  const advance = advanceTarget(c);
   $('#view').innerHTML = `
     <div class="case-head">
       <div>
@@ -1131,14 +1241,16 @@ function renderCase() {
         <p class="case-meta">${esc(c.workflow)} · Room ${esc(c.switchRoom)} · ${statePill(c.state)}${c.demo ? ' · Demo data' : ''}</p>
       </div>
       <div class="move-to">
+        ${advance ? `<button class="btn" type="button" id="advance-btn">Advance to ${esc(prettyState(advance))} →</button>` : ''}
         ${primary ? `<button class="btn" type="button" data-goto-tab="${esc(primary.tab)}">${esc(primary.label)}</button>` : ''}
         <label class="visually-hidden" for="move-select">Move case to</label>
-        <select id="move-select">${moveOptions(c.state).map((t) => `<option value="${t}">${esc(moveLabel(t))}</option>`).join('') || '<option value="">No moves available</option>'}</select>
+        <select id="move-select">${moveOptions(c.state).map((t) => `<option value="${t}">${esc(moveLabel(t, c.state))}</option>`).join('') || '<option value="">No moves available</option>'}</select>
         <button class="ghost-btn" id="move-btn" ${moveOptions(c.state).length ? '' : 'disabled'}>Move</button>
         <button class="ghost-btn" id="back-btn">← All cases</button>
       </div>
     </div>
     <p class="inline-error" id="case-error" role="alert" hidden></p>
+    ${terminalChip}
     <ol class="stepper" aria-label="Workflow stage">${stepper}</ol>
     <div class="tabs" role="tablist" aria-label="Case sections">
       ${tabs.map(([id, label]) => `<button class="tab ${currentTab === id ? 'is-active' : ''}" role="tab" id="tab-${id}" aria-selected="${currentTab === id}" aria-controls="case-main" data-tab="${id}">${label}</button>`).join('')}
@@ -1153,6 +1265,27 @@ function renderCase() {
     const to = $('#move-select').value; if (!to) return;
     try { await transition(c.id, to); } catch (e) { showCaseError(e.message); }
   });
+  // M10: the Advance button moves an early case one step forward.
+  const advBtn = $('#advance-btn');
+  if (advBtn && advance) advBtn.addEventListener('click', async () => {
+    try { await transition(c.id, advance); } catch (e) { showCaseError(e.message); }
+  });
+  // M16: on a phone the stepper scrolls horizontally — bring the
+  // current step into view so it is never stranded off-screen.
+  const curStep = $('.stepper [aria-current="step"]', $('#view'));
+  if (curStep) curStep.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  // CSP: the bullet chart widths are dynamic, so they are set from JS
+  // via the CSSOM (allowed under style-src 'self') instead of inline
+  // style="" attributes (blocked). Data attributes carry the values.
+  $$('.bullet-bar[data-w]', $('#view')).forEach((el) => { el.style.width = el.dataset.w + '%'; });
+  $$('.bullet-target[data-l], .bullet-old[data-l]', $('#view')).forEach((el) => { el.style.left = el.dataset.l + '%'; });
+  // M12: a citation click lands here — the Evidence tab was re-rendered
+  // above, so the row exists now. Scroll to it and flash it.
+  if (pendingEvidenceHighlight) {
+    const row = document.getElementById(`ev-${pendingEvidenceHighlight}`);
+    pendingEvidenceHighlight = null;
+    if (row) { row.scrollIntoView({ block: 'nearest' }); row.classList.add('flash'); }
+  }
   $$('.tab', $('#view')).forEach((t) => t.addEventListener('click', () => { currentTab = t.dataset.tab; renderCase(); syncCaseHash(); }));
   // In-page shortcuts (header primary action, Overview Next step,
   // Key figures "Analysis" link): switch to the named tab.
@@ -1176,7 +1309,7 @@ function showCaseError(msg) {
 }
 async function transition(caseId, to, extra = {}) {
   await api(`/api/cases/${caseId}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to, actor: 'Mara (owner)', actorKind: 'human', ...extra }) });
+    body: JSON.stringify({ to, ...extra }) });
   details[caseId] = await api(`/api/cases/${caseId}`);
   cases = await api('/api/cases');
   render();
@@ -1198,15 +1331,15 @@ async function transition(caseId, to, extra = {}) {
 async function submitProposal(c, s, allowReplace = false) {
   const proposalId = proposalIdForStrategy(s.id);
   if (!proposalId) throw new Error(`Unknown strategy ${s.id} — cannot submit a proposal for it.`);
-  const terms = termsForStrategy(s);
+  const terms = termsForStrategy(s, c);
   const cur = await api(`/api/cases/${c.id}`);
   if (cur.pendingApproval || cur.state === 'AWAITING_APPROVAL') {
     if (!allowReplace) throw new Error('A proposal is already pending for this case — approve or reject it before submitting another.');
-    await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'DISCUSSION', actor: 'Mara (owner)', actorKind: 'human' }) });
+    await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'DISCUSSION' }) });
   }
   const cur2 = await api(`/api/cases/${c.id}`);
-  if (cur2.state === 'DISCUSSION') await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'PROPOSAL', actor: 'Mara (owner)', actorKind: 'human' }) });
-  await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'AWAITING_APPROVAL', actor: 'Mara (owner)', actorKind: 'human', proposalId, terms: terms.full }) });
+  if (cur2.state === 'DISCUSSION') await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'PROPOSAL' }) });
+  await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'AWAITING_APPROVAL', proposalId, terms: terms.full }) });
   details[c.id] = await api(`/api/cases/${c.id}`);
   cases = await api('/api/cases');
   render();
@@ -1309,10 +1442,9 @@ function caseNextStep(c) {
 function haggleNextStep(c) {
   const rec = recommendedStrategy(c);
   // The strategy name and its recommendation note only — NOT the
-  // STRATEGY_TERMS text, which is hardcoded to the seed's fl oz prices
-  // ($0.16/$0.19…) and would be wrong for a case in another unit
-  // (e.g. a $4/kg case). The exact terms are shown where the user
-  // submits, in Negotiation.
+  // approval terms, which are computed from the case's own unit and
+  // the strategy's price/duration (termsForStrategy) and shown where
+  // the user submits, in Negotiation.
   const recLine = rec
     ? `Suggested first move: <strong>${esc(rec.name)}</strong> (${esc(rec.recommendation || '')})`
     : `No priced strategy meets the owner's mandate — review them in Negotiation before deciding.`;
@@ -1331,19 +1463,19 @@ function haggleNextStep(c) {
   if (c.state === 'REJECTED' || c.state === 'BLOCKED') {
     return { stage: `This case is ${c.state === 'REJECTED' ? 'rejected' : 'blocked'} — nothing is pending.`, action: `Move it back to Discussion to start a new proposal.`, button: null, tab: null };
   }
-  return { stage: `This case is still being set up.`, action: `Move it to Discussion when the numbers are ready.`, button: null, tab: null };
+  return { stage: `This case is still being set up.`, action: `Use the Advance button above to move it forward step by step — DRAFT → Intake → Investigating → Discussion.`, button: null, tab: null };
 }
 function haggleSummary(c) {
   const h = haggleHeroFigures(c);
   return `<section class="panel" aria-labelledby="key-h">
     <h2 id="key-h">Key figures</h2>
-    <p class="small muted" style="margin-bottom:10px">${h.note}</p>
+    <p class="small muted mb-10">${h.note}</p>
     <dl class="kv key-figures">
       <dt>Extra cost / serving</dt><dd>${signedMoney(h.perServing)}</dd>
       <dt>Extra cost / month</dt><dd>${money(h.monthly)}</dd>
       <dt>Food cost</dt><dd>${pct(h.foodPct)}</dd>
     </dl>
-    <p class="small muted" style="margin-top:10px">Full figures, the food-cost chart and the owner mandate live in <button class="link-btn" type="button" data-goto-tab="analysis">Analysis</button>.</p>
+    <p class="small muted mt-10">Full figures, the food-cost chart and the owner mandate live in <button class="link-btn" type="button" data-goto-tab="analysis">Analysis</button>.</p>
   </section>`;
 }
 // Blind-test completeness: the tally, the sample→version mapping and
@@ -1371,7 +1503,7 @@ function courtSummary(c) {
     : '';
   return `<section class="panel" aria-labelledby="court-sum-h">
     <h2 id="court-sum-h">Recipe court — summary</h2>
-    <p class="small" style="margin-bottom:10px">Facilitator view — you can see all versions; tasters see codes only.</p>
+    <p class="small mb-10">Facilitator view — you can see all versions; tasters see codes only.</p>
     <dl class="kv">
       <dt>Versions</dt><dd>${c.versions.length}</dd>
       <dt>Conflicts</dt><dd>${conflicts} of ${c.conflicts.length}</dd>
@@ -1379,7 +1511,7 @@ function courtSummary(c) {
       ${leaderRow}
       ${canonicalRow}
     </dl>
-    <p class="small muted" style="margin-top:10px">Coded samples, independent ratings (1–5). Scores are shown as submitted; the tally, the version mapping and the leader stay hidden until every reader has submitted. The dissenting version is preserved, never deleted.</p>
+    <p class="small muted mt-10">Coded samples, independent ratings (1–5). Scores are shown as submitted; the tally, the version mapping and the leader stay hidden until every reader has submitted. The dissenting version is preserved, never deleted.</p>
     <h3>Versions</h3>
     <p class="small">${c.versions.map((v) => esc(v.author)).join('<br>')}</p>
   </section>`;
@@ -1395,7 +1527,7 @@ function correctionSummary(c) {
       ${Object.entries(counts).map(([s, n]) => `<dt>${esc(s)}</dt><dd>${n}</dd>`).join('')}
       <dt>Evidence items</dt><dd>${(c.evidence || []).length}</dd>
     </dl>
-    <p class="small muted" style="margin-top:10px">Rule-based claim extraction only — sentences with a number, year, title or verifiable verb. Opinions are separated out, not claims. The original transcript is preserved.</p>
+    <p class="small muted mt-10">Rule-based claim extraction only — sentences with a number, year, title or verifiable verb. Opinions are separated out, not claims. The original transcript is preserved.</p>
   </section>`;
 }
 function courtMeans(c) {
@@ -1427,18 +1559,20 @@ function overviewTab(c) {
   const parts = [];
   if (c.workflow === 'HAGGLE') {
     const a = c.analysis;
+    const evList = (c.evidence || []).map((e) => `${evTag(e.id)} ${esc(e.type)}`).join(' and ') || '—';
     parts.push(`<section class="panel"><h2>What happened</h2>
       <p>${esc(c.input.supplier)} raised ${esc(c.input.ingredient)} from ${money(c.input.oldPrice)} to ${money(c.input.newPrice)} per ${esc(c.input.unit)} — ${a.pctChange}% — adding ${money(a.costDiffPerServing)} per ${esc(c.input.recipe)} serving, ${money(a.monthlyExtraCost)} a month at ${c.input.monthlySales} servings.</p>
-      <p class="small muted" style="margin-top:8px">The Negotiation Agent priced ${c.strategies.length} strategies against the owner mandate; the Financial Analyst verified the maths against evidence <span class="tag-ev">[E1]</span> and <span class="tag-ev">[E2]</span>. ${c.pendingApproval ? `A counter-offer is awaiting your approval: <strong>${esc(c.pendingApproval.terms)}</strong>.` : (c.approval ? `Approved: <strong>${esc(c.approval.terms)}</strong> — ${esc(c.approval.approvedBy)}.` : '')}</p></section>`);
+      <p class="small muted mt-8">CONVERGE calculated ${c.strategies.length} strategies against the owner mandate; the deterministic engine verified the maths against evidence ${evList}. ${c.pendingApproval ? `A counter-offer is awaiting your approval: <strong>${esc(c.pendingApproval.terms)}</strong>.` : (c.approval ? `Approved: <strong>${esc(c.approval.terms)}</strong> — ${esc(c.approval.approvedBy)}.` : '')}</p></section>`);
   }
   if (c.workflow === 'COURT') {
+    const dish = c.title.split(' — ')[0];
     parts.push(`<section class="panel"><h2>What happened</h2>
-      <p>Three versions of Nonna's ragù disagree on ${c.conflicts.filter((x) => x.conflict).length} variables. A blind test-cook with coded samples settles which version becomes canonical — the dissent stays on the record.</p></section>`);
+      <p>${c.versions.length} versions of ${esc(dish)} disagree on ${c.conflicts.filter((x) => x.conflict).length} variables. A blind test-cook with coded samples settles which version becomes canonical — the dissent stays on the record.</p></section>`);
   }
   if (c.workflow === 'CORRECTION') {
     const claims = (c.claims || []).map((cl) => getClaim(c, cl));
     parts.push(`<section class="panel"><h2>What happened</h2>
-      <p>The Verification Agent extracted ${claims.length} factual claims from the episode transcript. The guest corrects factual claims with evidence in the Switch room; the host approves the errata before publication.</p></section>`);
+      <p>The deterministic engine extracted ${claims.length} factual claims from the episode transcript by rule — numbers, years, titles, verifiable verbs. The guest corrects factual claims with evidence in the Switch room; the host approves the errata before publication.</p></section>`);
   }
   // Next step (2026-11-06): the stage in plain words and the one action
   // to take — the Overview's job is orientation, not figures. Shared by
@@ -1446,13 +1580,20 @@ function overviewTab(c) {
   const ns = caseNextStep(c);
   parts.push(`<section class="panel next-step-panel" aria-labelledby="ns-h"><h2 id="ns-h">Next step</h2>
     <p>${esc(ns.stage)}</p>
-    <p class="small" style="margin-top:6px">${ns.action}</p>
-    ${ns.button ? `<p style="margin-top:10px"><button class="btn" type="button" data-goto-tab="${esc(ns.tab)}">${esc(ns.button)}</button></p>` : ''}
+    <p class="small mt-6">${ns.action}</p>
+    ${ns.button ? `<p class="mt-10"><button class="btn" type="button" data-goto-tab="${esc(ns.tab)}">${esc(ns.button)}</button></p>` : ''}
   </section>`);
   // Participants live in the right rail (railPanels) — the overview tab
   // used to render them a second time (QA 2026-11-06).
   return parts.join('');
 }
+// M12 (2026-11-07): an evidence citation is a button, not a span.
+// Clicking it switches to the Evidence tab and highlights the row
+// (id `ev-E1`). The pending id is applied after renderCase re-renders
+// the tab content — see the delegated handler in bindCaseEvents.
+let pendingEvidenceHighlight = null;
+function evTag(id) { return `<button class="tag-ev tag-ev-link" type="button" data-evidence="${esc(id)}">[${esc(id)}]</button>`; }
+
 function analysisTab(c) {
   if (c.workflow === 'HAGGLE') {
     const a = c.analysis, i = c.input;
@@ -1461,7 +1602,7 @@ function analysisTab(c) {
     // so this panel cannot be read as the current outcome.
     const ap = c.approval ? approvedStrategy(c) : null;
     const approvedBanner = ap
-      ? `<p class="small" style="margin-bottom:10px"><strong>Approved impact: ${signedMoney(ap.extraVsOldPerMonth)} / month · food cost ${pct(ap.foodCostPct)}</strong> (${esc(c.approval.terms)}). The table below is the supplier's ${money(i.newPrice)} proposal if it had been accepted in full.</p>`
+      ? `<p class="small mb-10"><strong>Approved impact: ${signedMoney(ap.extraVsOldPerMonth)} / month · food cost ${pct(ap.foodCostPct)}</strong> (${esc(c.approval.terms)}). The table below is the supplier's ${money(i.newPrice)} proposal if it had been accepted in full.</p>`
       : '';
     // Financial impact chart — moved here from the Overview (2026-11-06):
     // the Overview keeps three key figures; the chart and the full
@@ -1471,13 +1612,13 @@ function analysisTab(c) {
     const h = haggleHeroFigures(c);
     const bp = bulletPositions(h.foodPct, a.oldFoodCostPct, i.targetFoodCostPct);
     const chart = `<div class="hero"><span class="hero-neg">${signedMoney(h.perServing)}</span> <small>/ serving · ${money(h.monthly)} / month</small></div>
-      <p class="small muted" style="margin:6px 0 0">${h.note}</p>
-      <p class="small muted" style="margin:6px 0 0">Cream ${money(i.oldPrice)} → ${money(i.newPrice)} / ${esc(i.unit)} (${a.pctChange === null ? '—' : '+' + a.pctChange + '%'}) · ${i.qtyPerServing} ${esc(i.unit)} / ${esc(i.recipe)} · menu ${money(i.menuPrice)}</p>
+      <p class="small muted my-6">${h.note}</p>
+      <p class="small muted my-6">Cream ${money(i.oldPrice)} → ${money(i.newPrice)} / ${esc(i.unit)} (${a.pctChange === null ? '—' : '+' + a.pctChange + '%'}) · ${i.qtyPerServing} ${esc(i.unit)} / ${esc(i.recipe)} · menu ${money(i.menuPrice)}</p>
       <div class="bullet-wrap">
         <div class="bullet" role="img" aria-label="Food cost rises from ${pct(a.oldFoodCostPct)} to ${pct(h.foodPct)}; target is ${i.targetFoodCostPct} percent">
-          <span class="bullet-bar" style="width:${bp.bar.toFixed(1)}%"></span>
-          <span class="bullet-target" style="left:${bp.target.toFixed(1)}%" title="Target ${i.targetFoodCostPct}%"></span>
-          <span class="bullet-old" style="left:${bp.old.toFixed(1)}%" title="Before ${pct(a.oldFoodCostPct)}"></span>
+          <span class="bullet-bar" data-w="${bp.bar.toFixed(1)}"></span>
+          <span class="bullet-target" data-l="${bp.target.toFixed(1)}" title="Target ${i.targetFoodCostPct}%"></span>
+          <span class="bullet-old" data-l="${bp.old.toFixed(1)}" title="Before ${pct(a.oldFoodCostPct)}"></span>
         </div>
         <div class="bullet-scale" aria-hidden="true"><span>0%</span><span>20%</span><span>${bp.heroOffScale ? '40%+' : '40%'}</span></div>
         <p class="small bullet-legend" aria-hidden="true"><span><span class="legend-old">—</span> Before ${pct(a.oldFoodCostPct)}</span><span><span class="legend-target">|</span> Target ${i.targetFoodCostPct}%</span></p>
@@ -1501,7 +1642,7 @@ function analysisTab(c) {
           <tr><td>Extra cost</td><td class="num">—</td><td class="num">${money(a.monthlyExtraCost)} / mo · ${money(a.annualExtraCost)} / yr</td></tr>
           <tr><td>Max sustainable price (at ${i.targetFoodCostPct}% target)</td><td class="num" colspan="2">${money(a.maxSustainableUnitPrice)} / ${esc(i.unit)}</td></tr>
         </tbody></table></div>
-      <p class="small muted" style="margin-top:10px">Assumptions: ${i.qtyPerServing} ${esc(i.unit)} per serving · other ingredients ${money(i.otherIngredientsCostPerServing)} · menu ${money(i.menuPrice)} · ${i.monthlySales} servings/month. Evidence: <span class="tag-ev">[E1]</span> invoice, <span class="tag-ev">[E2]</span> recipe. Gross ≠ net: rent, labour and overhead are not in this model. Monthly = servings × per-serving difference; annual = monthly × 12.</p>
+      <p class="small muted mt-10">Assumptions: ${i.qtyPerServing} ${esc(i.unit)} per serving · other ingredients ${money(i.otherIngredientsCostPerServing)} · menu ${money(i.menuPrice)} · ${i.monthlySales} servings/month. Evidence: ${(c.evidence || []).map((e) => `${evTag(e.id)} ${esc(e.type)}`).join(', ') || 'none filed'}. Gross ≠ net: rent, labour and overhead are not in this model. Monthly = servings × per-serving difference; annual = monthly × 12.</p>
     </section>`;
   }
   if (c.workflow === 'COURT') return courtMatrix(c) + courtHeat(c) + courtVersionForm(c);
@@ -1523,7 +1664,7 @@ function analysisTab(c) {
     return `<li>${esc(s)} ${tag}</li>`;
   }).join('');
   const transcriptPanel = `<section class="panel" aria-labelledby="transcript-h"><h2 id="transcript-h">Original transcript — preserved</h2>
-    <p class="small muted" style="margin-bottom:8px">The guest's words are kept verbatim. Factual assertions become claims below; opinions are separated out and never treated as facts.</p>
+    <p class="small muted mb-8">The guest's words are kept verbatim. Factual assertions become claims below; opinions are separated out and never treated as facts.</p>
     <ol class="transcript-list">${transcriptRows}</ol></section>`;
   return transcriptPanel + claimsTable(c, claims, false);
 }
@@ -1553,12 +1694,12 @@ function courtTallyBlock(c) {
     .filter(([code]) => code !== leader.code)
     .map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ');
   const canonical = c.canonicalVersion
-    ? `<p class="small" style="margin-top:6px"><strong>Canonical version: ${esc((c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion)}</strong> — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}, ${fmtDateTime(c.canonicalAdoption?.adoptedAt)}. The other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>`
+    ? `<p class="small mt-6"><strong>Canonical version: ${esc((c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion)}</strong> — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}, ${fmtDateTime(c.canonicalAdoption?.adoptedAt)}. The other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>`
     : '';
   return `<h3>Canonical recipe — tally</h3>
     <p class="small">Leading by blind mean (overall): <strong>${esc(leader.author)} — ${leader.overall.toFixed(2)} / 5</strong>.
     ${meansLine}.</p>
-    <p class="small muted" style="margin-top:6px">Dissent preserved: ${losing} — the other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>${canonical}`;
+    <p class="small muted mt-6">Dissent preserved: ${losing} — the other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>${canonical}`;
 }
 function courtMatrix(c) {
   return `<section class="panel" aria-labelledby="mx-h"><h2 id="mx-h">Comparison matrix — versions of one dish</h2>
@@ -1572,7 +1713,7 @@ function courtMatrix(c) {
         const delta = cf.conflict ? 'Δ' : '—';
         return `<tr><td><strong>${esc(cf.variable)}</strong></td>${cf.values.map((v) => `<td class="${cf.conflict ? 'conflict-cell' : ''}">${esc(v.value)}${cf.conflict ? ' <span class="delta-tag">Δ</span>' : ''}</td>`).join('')}<td class="muted small delta-col">${esc(delta)}</td></tr>`;
       }).join('')}</tbody></table></div>
-    <p class="small muted" style="margin-top:8px">Evidence: <span class="tag-ev">[E1]</span> handwritten card photo — the original.</p>
+    <p class="small muted mt-8">Evidence: ${(() => { const e0 = (c.evidence || [])[0]; return e0 ? `${evTag(e0.id)} ${esc(e0.type)}${e0.source ? ` — ${esc(e0.source)}` : ''}${e0.note ? ` — ${esc(e0.note)}` : ''}` : 'none filed'; })()}</p>
   </section>`;
 }
 function courtHeat(c) {
@@ -1611,11 +1752,11 @@ function courtHeat(c) {
     ? `<h3>Canonical recipe — tally</h3>
     <p class="small">Leading by blind mean (overall): <strong>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</strong>.
     ${Object.entries(courtMeans(c)).map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ')}.</p>
-    <p class="small muted" style="margin-top:6px">Dissent preserved: ${Object.entries(courtMeans(c)).filter(([code]) => code !== leader[0]).map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ')} — the other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>${c.canonicalVersion ? `<p class="small" style="margin-top:6px"><strong>Canonical version: ${esc((c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion)}</strong> — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}. The other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>` : ''}`
+    <p class="small muted mt-6">Dissent preserved: ${Object.entries(courtMeans(c)).filter(([code]) => code !== leader[0]).map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ')} — the other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>${c.canonicalVersion ? `<p class="small mt-6"><strong>Canonical version: ${esc((c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion)}</strong> — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}. The other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>` : ''}`
     : `<h3>Canonical recipe — tally</h3>
     <p class="small"><strong>Tally hidden — ${ts.submitted} of ${ts.expected} ratings submitted.</strong> The version mapping and the leader stay hidden until every reader has rated every sample; the tally appears here then.</p>`;
   return `<section class="panel" aria-labelledby="blind-h"><h2 id="blind-h">Blind scores — heat table (1–5)</h2>
-    <p class="small muted" style="margin-bottom:10px">Blind scores held by the server — ${(c.ratings || []).length} ratings from ${cs.readers.length} readers on record. Rows where readers differ by ≥2 are highlighted. The version mapping is revealed in the tally, after all readers submitted.</p>
+    <p class="small muted mb-10">Blind scores held by the server — ${(c.ratings || []).length} ratings from ${cs.readers.length} readers on record. Rows where readers differ by ≥2 are highlighted. The version mapping is revealed in the tally, after all readers submitted.</p>
     <div class="sample-switch" role="group" aria-label="Choose a coded sample">
       ${Object.entries(cs.samples).map(([code, name]) => `<button class="ghost-btn btn-sm ${courtSample === code ? 'is-active' : ''}" data-sample="${code}" aria-pressed="${courtSample === code}">${sampleLabel(code)}</button>`).join('')}
     </div>
@@ -1647,11 +1788,11 @@ function courtVersionForm(c) {
     </section>`;
   }
   return `<section class="panel" aria-labelledby="ver-h"><h2 id="ver-h">Submit a version</h2>
-    <p class="small muted" style="margin-bottom:10px">Add your version of the dish before any ratings are submitted. It becomes the next coded sample (${'S' + (c.samples.length + 1)}) — the mapping stays blind until the tally is complete, and every version stays on the record.</p>
+    <p class="small muted mb-10">Add your version of the dish before any ratings are submitted. It becomes the next coded sample (${'S' + (c.samples.length + 1)}) — the mapping stays blind until the tally is complete, and every version stays on the record.</p>
     <form class="rating-form" id="version-form">
       <label>Author <input type="text" id="version-author" required placeholder="e.g. Zia" autocomplete="off"></label>
-      <label style="flex:1 1 100%">Ingredients — one per line, “name: amount” <textarea id="version-ingredients" rows="3" required placeholder="salt: a pinch&#10;fat: lard&#10;simmer: 3 hours"></textarea></label>
-      <label style="flex:1 1 100%">Steps — one per line (optional) <textarea id="version-steps" rows="3" placeholder="Brown the meat&#10;Simmer 3 hours"></textarea></label>
+      <label class="field-full">Ingredients — one per line, “name: amount” <textarea id="version-ingredients" rows="3" required placeholder="salt: a pinch&#10;fat: lard&#10;simmer: 3 hours"></textarea></label>
+      <label class="field-full">Steps — one per line (optional) <textarea id="version-steps" rows="3" placeholder="Brown the meat&#10;Simmer 3 hours"></textarea></label>
       <button class="btn btn-sm" type="submit">Submit version</button>
     </form>
     <p class="small muted" id="version-note"></p>
@@ -1659,16 +1800,16 @@ function courtVersionForm(c) {
 }
 function claimsTable(c, claims, interactive) {
   return `<section class="panel" aria-labelledby="cl-h"><h2 id="cl-h">Claims from the transcript</h2>
-    <p class="small muted" style="margin-bottom:10px">Claim statuses are persisted by the server and recorded in the audit trail. Only a human (host/guest) may change a status — the Verification Agent proposes.</p>
+    <p class="small muted mb-10">Claim statuses are persisted by the server and recorded in the audit trail. Only a human (host/guest) may change a status — the engine extracts claims; humans decide.</p>
     <div class="table-wrap"><table class="claims-table">
       <caption>${claims.length} factual claims extracted by rule, not by LLM.</caption>
       <thead><tr><th scope="col">Claim</th><th scope="col">Kind</th><th scope="col">Status</th><th scope="col">Evidence</th>${interactive ? '<th scope="col">Actions</th>' : ''}</tr></thead>
       <tbody>${claims.map((cl) => {
         // L5: evidence references come from the server (detail endpoint),
         // matched against the case's evidence notes — no client map.
-        const ev = (cl.evidence || []).map((e) => `<span class="tag-ev">[${e}]</span>`).join(' ') || '—';
+        const ev = (cl.evidence || []).map((e) => evTag(e)).join(' ') || '—';
         const statusCls = { Verified: 'pill-teal', Corrected: 'pill-teal', Clarified: 'pill-grey', Disputed: 'pill-amber', Unresolved: 'pill-grey' }[cl.status] || 'pill-grey';
-        let row = `<tr data-claim="${esc(cl.id)}"><td><span class="num">${esc(cl.id)}</span> ${esc(cl.text)}${cl.challenge ? `<div class="challenge-note">Guest challenge (${esc(cl.challenge.by)}): “${esc(cl.challenge.text)}”${cl.challenge.evidence ? ` · cites <span class="tag-ev">[${esc(cl.challenge.evidence)}]</span>` : ''}</div>` : ''}</td>
+        let row = `<tr data-claim="${esc(cl.id)}"><td><span class="num">${esc(cl.id)}</span> ${esc(cl.text)}${cl.challenge ? `<div class="challenge-note">Guest challenge (${esc(cl.challenge.by)}): “${esc(cl.challenge.text)}”${cl.challenge.evidence ? ` · cites ${evTag(cl.challenge.evidence)}` : ''}</div>` : ''}</td>
           <td>${esc(cl.kind)}</td><td><span class="pill ${statusCls}">${esc(cl.status)}</span></td><td>${ev}</td>`;
         if (interactive) {
           row += `<td>
@@ -1694,7 +1835,7 @@ function negotiationTab(c) {
       const author = (c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion;
       decision = `<div class="approve-stamp"><span class="stamp-word">Canonical ✓</span><br>
         “${esc(author)} is the canonical version.” — <b>${esc(c.canonicalAdoption?.adoptedBy || '')}</b>, ${fmtDateTime(c.canonicalAdoption?.adoptedAt)}</div>
-        <p class="small muted" style="margin-top:8px">The losing versions stay on the record as footnotes — never deleted.</p>`;
+        <p class="small muted mt-8">The losing versions stay on the record as footnotes — never deleted.</p>`;
     } else if (ts.complete && leader) {
       decision = `<p class="small">The tally is complete. Adopting records the decision in the audit trail, like a HAGGLE approval — the losing versions stay on the record as footnotes.</p>
         <p><button class="btn" id="adopt-btn">Adopt as canonical — ${esc(leader.author)} (${leader.overall.toFixed(2)} / 5)</button></p>
@@ -1704,7 +1845,7 @@ function negotiationTab(c) {
     }
     return `<section class="panel" aria-labelledby="vote-h"><h2 id="vote-h">Family vote — adopt the canonical version</h2>
       ${courtTallyBlock(c)}
-      <div style="margin-top:10px">${decision}</div>
+      <div class="mt-10">${decision}</div>
       <p class="small muted" id="adopt-note"></p>
     </section>
     <section class="panel"><h2>Family vote</h2><p>The family votes in the Switch room ${esc(c.switchRoom)} — the tally above is the blind result; the vote is the decision. <button class="ghost-btn btn-sm" data-room-btn>Open room transcript</button></p></section>`;
@@ -1712,9 +1853,38 @@ function negotiationTab(c) {
   const claims = (c.claims || []).map((cl) => getClaim(c, cl));
   const corrected = claims.filter((cl) => cl.status === 'Corrected');
   return claimsTable(c, claims, true) + `<section class="panel" aria-labelledby="err-h"><h2 id="err-h">Errata draft — pre-publish checklist</h2>
-    ${corrected.length ? `<ol class="audit-list">${corrected.map((cl) => `<li><span class="num">${esc(cl.id)}</span> — ${esc(cl.text)}<br><span class="muted">Correction: ${esc(cl.challenge ? cl.challenge.text : 'approved by host')}</span></li>`).join('')}</ol><p class="small" style="margin-top:8px">Publish only after every Corrected claim is in the errata and every Disputed claim is resolved.</p>` : '<p class="empty">No corrections approved yet. Challenge a claim above, then the host approves it into this errata draft.</p>'}
-    <p style="margin-top:10px"><button class="ghost-btn btn-sm" data-room-btn>Open room transcript ${esc(c.switchRoom)}</button></p>
+    ${corrected.length ? `<ol class="audit-list">${corrected.map((cl) => `<li><span class="num">${esc(cl.id)}</span> — ${esc(cl.text)}<br><span class="muted">Correction: ${esc(cl.challenge ? cl.challenge.text : 'approved by host')}</span></li>`).join('')}</ol><p class="small mt-8">Publish only after every Corrected claim is in the errata and every Disputed claim is resolved.</p>` : '<p class="empty">No corrections approved yet. Challenge a claim above, then the host approves it into this errata draft.</p>'}
+    <p class="mt-10"><button class="ghost-btn btn-sm" data-room-btn>Open room transcript ${esc(c.switchRoom)}</button></p>
   </section>`;
+}
+// The Negotiation terms timeline, derived from the case — never
+// invented (H7, 2026-11-07). The supplier name comes from the case
+// input, the prices from the engine data, and the counter-offer row
+// exists ONLY when a proposal is actually pending or approved for
+// that strategy, with its real recorded terms. A case with nothing
+// pending shows the supplier proposal + "awaiting owner decision"
+// only — never a $0.19 counter-offer that never happened, never
+// "DairyCo" for another supplier. Pure, so the static tests can
+// exercise it directly.
+function haggleTimeline(c) {
+  const a = c.analysis, i = c.input;
+  const supplier = i.supplier || 'Supplier';
+  const rows = [
+    { price: money(i.oldPrice), label: 'Old price — baseline', who: `${supplier} rate card` },
+    { price: money(i.newPrice), label: a.pctChange === null ? 'Supplier proposal' : `Supplier proposal (${signedPct(a.pctChange)}%)`, who: `${supplier} rep` },
+  ];
+  const rec = c.pendingApproval || c.approval;
+  const strat = rec ? (c.strategies || []).find((s) => PROPOSAL_TO_STRATEGY[rec.proposalId] === s.id) : null;
+  if (rec && strat) {
+    rows.push({ price: money(strat.unitPrice), label: `Counter-offer — ${rec.terms}`, who: `${supplier} rep · ${rec.proposalId}` });
+  }
+  const approved = c.approval ? approvedStrategy(c) : null;
+  rows.push({
+    price: approved ? money(approved.unitPrice) : '?',
+    label: c.approval ? `Approved — ${c.approval.terms}` : 'Approval — pending owner decision',
+    who: c.approval ? c.approval.approvedBy : 'Owner',
+  });
+  return rows;
 }
 function haggleNegotiation(c) {
   const a = c.analysis, i = c.input;
@@ -1723,18 +1893,10 @@ function haggleNegotiation(c) {
       || (c.pendingApproval && PROPOSAL_TO_STRATEGY[c.pendingApproval.proposalId]) || 'counter-019';
   }
   const sel = (c.strategies || []).find((s) => s.id === selectedStrategy) || c.strategies[0];
-  const timeline = [
-    { price: money(i.oldPrice), label: `Old price — baseline`, who: 'DairyCo rate card' },
-    { price: money(i.newPrice), label: `Supplier proposal (${signedPct(a.pctChange)}%)`, who: 'DairyCo rep' },
-    { price: '$0.19', label: 'Counter-offer — 6 weeks, in writing', who: 'DairyCo rep · P2' },
-    // M17: before approval there is no Approved step — the row is the
-    // decision still to come, not a completed one. After approval it
-    // names the approved terms and their price (from engine data).
-    { price: c.approval ? money((approvedStrategy(c) || { unitPrice: 0.19 }).unitPrice) : '?', label: c.approval ? `Approved — ${esc(c.approval.terms)}` : 'Approval — pending owner decision', who: c.approval ? c.approval.approvedBy : 'Owner' },
-  ];
+  const timeline = haggleTimeline(c);
   return `<section class="panel" aria-labelledby="terms-h"><h2 id="terms-h">Negotiation — proposals &amp; terms</h2>
     <h3>Terms timeline</h3>
-    <ol class="timeline">${timeline.map((t) => `<li><span class="tl-price">${esc(t.price)} / fl oz</span><span>${esc(t.label)}</span><span class="tl-who">${esc(t.who)}</span></li>`).join('')}</ol>
+    <ol class="timeline">${timeline.map((t) => `<li><span class="tl-price">${esc(t.price)} / ${esc(c.input.unit)}</span><span>${esc(t.label)}</span><span class="tl-who">${esc(t.who)}</span></li>`).join('')}</ol>
     <h3>Proposals — select a row to recompute impact</h3>
     <div class="table-wrap"><table>
       <caption>Strategies priced by the deterministic engine. Selecting a row updates the impact panel and the approval button.</caption>
@@ -1748,8 +1910,8 @@ function haggleNegotiation(c) {
         const statusPill = approvedHere ? '<span class="pill pill-teal">Approved</span>'
           : awaitingHere ? '<span class="pill pill-amber">Awaiting</span>'
           : '<span class="pill pill-grey">Proposed</span>';
-        return `<tr class="clickable ${s.id === selectedStrategy ? 'sel' : ''}" data-strategy="${esc(s.id)}" tabindex="0">
-        <td><strong>${esc(s.name)}</strong><br><span class="muted small">${esc(s.detail)}</span>${s.unverified ? '<br><span class="pill pill-amber">Unverified quote</span>' : ''}${s.risk ? `<br><span class="small" style="color:var(--red)">${esc(s.risk)}</span>` : ''}</td>
+        return `<tr class="clickable ${s.id === selectedStrategy ? 'sel' : ''}" data-strategy="${esc(s.id)}" tabindex="0" role="button" aria-label="Select strategy ${esc(s.name)}">
+        <td><strong>${esc(s.name)}</strong><br><span class="muted small">${esc(s.detail)}</span>${s.unverified ? '<br><span class="pill pill-amber">Unverified quote</span>' : ''}${s.risk ? `<br><span class="small text-red">${esc(s.risk)}</span>` : ''}</td>
         <td class="num">${money(s.unitPrice)}</td><td class="num">${pct(s.foodCostPct)}</td>
         <td class="num">${s.extraVsOldPerMonth >= 0 ? '+' : ''}${money(s.extraVsOldPerMonth)}</td>
         <td>${statusPill}</td></tr>`; }).join('')}</tbody></table></div>
@@ -1758,7 +1920,7 @@ function haggleNegotiation(c) {
 }
 function impactPanel(c, s) {
   const a = c.analysis;
-  const terms = termsForStrategy(s);
+  const terms = termsForStrategy(s, c);
   const inside = s.foodCostPct <= c.input.targetFoodCostPct;
   return `<h3>Impact — ${esc(s.name)}</h3>
     <dl class="kv">
@@ -1768,8 +1930,8 @@ function impactPanel(c, s) {
       <dt>Extra vs old price</dt><dd>${s.extraVsOldPerMonth >= 0 ? '+' : ''}${money(s.extraVsOldPerMonth)} / month</dd>
       <dt>Saving vs ${money(c.input.newPrice)}</dt><dd>${money(s.savingVsNewPerMonth)} / month</dd>
     </dl>
-    <p class="small" style="margin-top:8px">Recommendation: ${esc(s.recommendation || '')}</p>
-    <div class="approve-bar" style="margin-top:12px">
+    <p class="small mt-8">Recommendation: ${esc(s.recommendation || '')}</p>
+    <div class="approve-bar mt-12">
       ${approvalControls(c, s, terms)}
     </div>`;
 }
@@ -1780,7 +1942,7 @@ function approvalControls(c, s, terms) {
     // agreement as complete. Only offered while APPROVED, not once
     // the case is already COMPLETED.
     const completeBtn = c.state === 'APPROVED'
-      ? `<button class="btn" id="complete-btn" style="margin-top:10px">Mark completed — record agreement</button>
+      ? `<button class="btn mt-10" id="complete-btn">Mark completed — record agreement</button>
       <p class="small muted">Completion needs no further approval; this records the agreed terms as complete.</p>` : '';
     return `<div class="approve-stamp"><span class="stamp-word">Approved ✓</span><br>
       “I approve ${esc(c.approval.terms)}.” — <b>${esc(c.approval.approvedBy)}</b>, ${fmtDateTime(c.approval.approvedAt)}</div>${completeBtn}`;
@@ -1821,8 +1983,8 @@ function evidenceTab(c) {
     <div class="table-wrap"><table>
       <caption>Every item has a source and a status; citations link claims to evidence.</caption>
       <thead><tr><th scope="col">ID</th><th scope="col">Type</th><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Note</th></tr></thead>
-      <tbody>${items.map((e) => `<tr><td><span class="tag-ev">[${esc(e.id)}]</span></td><td>${esc(e.type)}</td><td>${esc(e.source)}</td><td>${esc(e.status)}</td><td class="muted">${esc(e.note || '')}</td></tr>`).join('') || `<tr><td colspan="5" class="empty">No evidence filed for this case.</td></tr>`}</tbody></table></div>
-    <p class="small muted" style="margin-top:8px">Clicking a citation <span class="tag-ev">[E1]</span> in Analysis or Negotiation highlights the evidence it rests on.</p>
+      <tbody>${items.map((e) => `<tr id="ev-${esc(e.id)}"><td><span class="tag-ev">[${esc(e.id)}]</span></td><td>${esc(e.type)}</td><td>${esc(e.source)}</td><td>${esc(e.status)}</td><td class="muted">${esc(e.note || '')}</td></tr>`).join('') || `<tr><td colspan="5" class="empty">No evidence filed for this case.</td></tr>`}</tbody></table></div>
+    <p class="small muted mt-8">Clicking a citation <span class="tag-ev">[E1]</span> in Analysis or Negotiation highlights the evidence it rests on.</p>
   </section>`;
 }
 function auditTab(c) {
@@ -1835,19 +1997,19 @@ function auditTab(c) {
 }
 function railPanels(c) {
   const participants = `<section class="panel" aria-labelledby="part-h"><h2 id="part-h">Participants</h2>
-    <p class="small">${(c.participants || []).map((p) => `${esc(p.name)} — ${esc(p.role)}${p.kind === 'agent' ? ' · <span style="color:var(--teal-dark);font-weight:600">AGENT</span>' : ''}`).join('<br>')}</p></section>`;
+    <p class="small">${(c.participants || []).map((p) => `${esc(p.name)} — ${esc(p.role)}${p.kind === 'agent' ? ` · <span class="agent-tag">${esc((p.role || 'role').toUpperCase())}</span>` : ''}`).join('<br>')}</p></section>`;
   // Approvals panel (2026-11-06): shown only when there is something to
   // show — a pending proposal, a signed approval, or a rejection. An
   // empty "No pending approval" panel in the rail was noise on every
   // case that had not reached approval yet.
   const approvals = (c.pendingApproval || c.approval || c.rejectedTerms) ? `<section class="panel" aria-labelledby="appr-h"><h2 id="appr-h">Approvals</h2>
     ${c.pendingApproval ? `<p class="small">Pending: <strong>${esc(c.pendingApproval.terms)}</strong><br><span class="muted">requested by ${esc(c.pendingApproval.requestedBy)}</span></p>` : ''}
-    ${c.approval ? `<div class="approve-stamp" style="margin-top:8px"><span class="stamp-word">Approved ✓</span><br>“I approve ${esc(c.approval.terms)}.” — <b>${esc(c.approval.approvedBy)}</b></div>` : ''}
-    ${c.rejectedTerms ? `<p class="small" style="margin-top:8px">Rejected: <strong>${esc(c.rejectedTerms.terms)}</strong><br><span class="muted">rejected by ${esc(c.rejectedTerms.rejectedBy)}, ${fmtDateTime(c.rejectedTerms.rejectedAt)}</span></p>` : ''}
+    ${c.approval ? `<div class="approve-stamp mt-8"><span class="stamp-word">Approved ✓</span><br>“I approve ${esc(c.approval.terms)}.” — <b>${esc(c.approval.approvedBy)}</b></div>` : ''}
+    ${c.rejectedTerms ? `<p class="small mt-8">Rejected: <strong>${esc(c.rejectedTerms.terms)}</strong><br><span class="muted">rejected by ${esc(c.rejectedTerms.rejectedBy)}, ${fmtDateTime(c.rejectedTerms.rejectedAt)}</span></p>` : ''}
   </section>` : '';
   const room = `<section class="panel" aria-labelledby="room-h"><h2 id="room-h">Switch room</h2>
     <p class="small"><span class="num">${esc(c.switchRoom)}</span> · ${(c.participants || []).length} members</p>
-    <p class="small muted" style="margin:6px 0 10px">${statusData?.switchMode === 'REAL-SWITCH' ? 'Live Switch room — a real Mattermost channel via the Switch bridge. Messages here are real.' : 'SIMULATED — stub server, not Switch. Transcript opens in a drawer.'}</p>
+    <p class="small muted my-6-10">${statusData?.switchMode === 'REAL-SWITCH' ? 'Live Switch room — a real Mattermost channel via the Switch bridge. Messages here are real.' : 'SIMULATED — stub server, not Switch. Transcript opens in a drawer.'}</p>
     <button class="ghost-btn btn-sm" data-room-btn>Open room transcript</button>
   </section>`;
   const ev = `<section class="panel" aria-labelledby="evsum-h"><h2 id="evsum-h">Evidence</h2>
@@ -1858,6 +2020,14 @@ function railPanels(c) {
 
 // ---------- case events ----------
 function bindCaseEvents(c) {
+  // M12: a citation button ([E1]) switches to the Evidence tab and
+  // highlights the matching row — applied at the end of renderCase.
+  $$('[data-evidence]', $('#view')).forEach((b) => b.addEventListener('click', () => {
+    pendingEvidenceHighlight = b.dataset.evidence;
+    currentTab = 'evidence';
+    renderCase();
+    syncCaseHash();
+  }));
   // N1 (QA 2026-11-06 re-run): this binding used to match
   // [data-strategy] anywhere — including #approve-btn, which carried
   // data-strategy too. Enter/Space on the button was swallowed by the
@@ -1921,7 +2091,7 @@ function bindCaseEvents(c) {
     if (!author) { note.textContent = 'Author must not be empty.'; return; }
     if (!Object.keys(ingredients).length) { note.textContent = 'Ingredients must list at least one “name: amount” line.'; return; }
     try {
-      const res = await api('/api/court/version', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, author, ingredients, steps: steps.length ? steps : undefined, actor: 'Mara (owner)', actorKind: 'human' }) });
+      const res = await api('/api/court/version', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, author, ingredients, steps: steps.length ? steps : undefined }) });
       const msg = `Version submitted — ${author} is now coded sample ${res.sampleCode}. The mapping stays blind until the tally is complete.`;
       await reloadCase(c); renderCase();
       const fresh = $('#version-note');
@@ -1932,7 +2102,7 @@ function bindCaseEvents(c) {
   const adoptBtn = $('#adopt-btn');
   if (adoptBtn) adoptBtn.addEventListener('click', async () => {
     try {
-      await api('/api/court/adopt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, actor: 'Mara (owner)', actorKind: 'human' }) });
+      await api('/api/court/adopt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id }) });
       await reloadCase(c); renderCase();
       const fresh = $('#adopt-note');
       if (fresh) fresh.textContent = 'Canonical version adopted — recorded in the audit trail. The losing versions stay on the record as footnotes.';
@@ -1974,19 +2144,19 @@ function bindCaseEvents(c) {
   $$('[data-room-btn]', $('#view')).forEach((b) => b.addEventListener('click', () => openRoom(c.id)));
   $$('[data-verify]', $('#view')).forEach((b) => b.addEventListener('click', async () => {
     try {
-      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: b.dataset.verify, status: 'Verified', actor: 'Host', actorKind: 'human' }) });
+      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: b.dataset.verify, status: 'Verified' }) });
       await reloadCase(c); renderCase();
     } catch (e) { showCaseError(e.message); }
   }));
   $$('[data-clarify]', $('#view')).forEach((b) => b.addEventListener('click', async () => {
     try {
-      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: b.dataset.clarify, status: 'Clarified', actor: 'Host', actorKind: 'human' }) });
+      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: b.dataset.clarify, status: 'Clarified' }) });
       await reloadCase(c); renderCase();
     } catch (e) { showCaseError(e.message); }
   }));
   $$('[data-approve-claim]', $('#view')).forEach((b) => b.addEventListener('click', async () => {
     try {
-      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: b.dataset.approveClaim, status: 'Corrected', actor: 'Host', actorKind: 'human' }) });
+      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: b.dataset.approveClaim, status: 'Corrected' }) });
       await reloadCase(c); renderCase();
     } catch (e) { showCaseError(e.message); }
   }));
@@ -2011,7 +2181,7 @@ function showChallengeForm(c, claimId) {
     <select id="challenge-ev" aria-label="Evidence to cite">${evOptions}<option value="">No evidence</option></select>
     <button class="btn btn-sm" type="submit">Submit challenge as guest</button>
     <button class="ghost-btn btn-sm" type="button" id="challenge-cancel">Cancel</button>
-  </form><p class="small muted">The guest challenges with evidence; the Verification Agent evaluates; the host approves. The original transcript is preserved.</p>`;
+  </form><p class="small muted">The guest challenges with evidence; the host approves. The original transcript is preserved.</p>`;
   if (row) {
     row.insertAdjacentHTML('afterend', `<tr class="challenge-row"><td colspan="5">${formHtml}</td></tr>`);
   } else {
@@ -2025,7 +2195,7 @@ function showChallengeForm(c, claimId) {
     const text = $('#challenge-text').value.trim();
     const ev = $('#challenge-ev').value;
     try {
-      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: claimId, text: claim?.text || '', status: 'Disputed', actor: 'Dr Amara Osei (guest)', actorKind: 'human', challenge: { text, evidence: ev || null } }) });
+      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: claimId, text: claim?.text || '', status: 'Disputed', challenge: { text, evidence: ev || null } }) });
       await reloadCase(c); renderCase();
     } catch (err) { showCaseError(err.message); }
   });
@@ -2063,7 +2233,7 @@ function closeModal() {
 function openApproveModal(c) {
   rememberFocus();
   const s = (c.strategies || []).find((x) => x.id === selectedStrategy) || c.strategies[0];
-  const terms = termsForStrategy(s);
+  const terms = termsForStrategy(s, c);
   $('#modal-title').textContent = 'Confirm approval';
   $('#modal-terms').textContent = `I approve ${terms.full}. — Mara (owner), case ${c.id}`;
   // H7: the financial consequences and the recommendation, from the
@@ -2088,7 +2258,7 @@ function openApproveModal(c) {
         // submitProposal helper with the canonical P-number proposalId).
         await submitProposal(c, s, true);
       }
-      await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'APPROVED', actor: 'Mara (owner)', actorKind: 'human' }) });
+      await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'APPROVED' }) });
       closeModal();
       details[c.id] = await api(`/api/cases/${c.id}`);
       cases = await api('/api/cases');
@@ -2107,7 +2277,7 @@ function openRejectModal(c) {
   rememberFocus();
   const s = (c.strategies || []).find((x) => x.id === selectedStrategy) || c.strategies[0];
   const terms = c.pendingApproval?.terms
-    || (STRATEGY_TERMS[s.id]?.full) || 'pending terms';
+    || termsForStrategy(s, c).full || 'pending terms';
   $('#modal-title').textContent = 'Confirm rejection';
   $('#modal-terms').textContent = `I reject ${terms}. — Mara (owner), case ${c.id}`;
   $('#modal-impact').textContent = `Impact if rejected: ${strategyImpactLine(c, s)} — the supplier's ${money(c.input.newPrice)} proposal stays unresolved; the case moves to REJECTED and the rejected terms are recorded in the audit trail.`;
@@ -2139,12 +2309,18 @@ function openRoom(caseId) {
   renderRoom();
   $('#room-drawer').hidden = false;
   $('#drawer-backdrop').hidden = false;
+  // L14: while the drawer (a modal dialog) is open, the app behind it
+  // is inert — keyboard and pointer users cannot reach it.
+  document.querySelector('.app').inert = true;
+  document.querySelector('.bottomnav').inert = true;
   $('#room-text').focus();
 }
 function closeRoom() {
   if ($('#room-drawer').hidden) return;
   $('#room-drawer').hidden = true;
   $('#drawer-backdrop').hidden = true;
+  document.querySelector('.app').inert = false;
+  document.querySelector('.bottomnav').inert = false;
   roomCaseId = null;
   restoreFocus();
 }
@@ -2212,6 +2388,11 @@ document.addEventListener('keydown', (e) => {
 
 (async function boot() {
   try {
+    // A session token is required before any mutating call — establish
+    // it first, and fail loudly (not silently) if the server will not
+    // issue one. loadAll() only reads, so a failed session still shows
+    // the error instead of a half-working app.
+    await ensureSession();
     await loadAll();
     // Hash route first; the legacy ?case=…&tab=… URL still works and is
     // rewritten to its hash form.
@@ -2226,6 +2407,6 @@ document.addEventListener('keydown', (e) => {
       render();
     }
   } catch (e) {
-    $('#view').innerHTML = `<section class="panel"><h2>Could not load CONVERGE</h2><p>${esc(e.message)}</p><p class="small muted">Is the server running? <span class="num">npm start</span> (port 3000).</p></section>`;
+    $('#view').innerHTML = `<section class="panel"><h2>Could not load CONVERGE</h2><p>${esc(e.message)}</p><p class="small muted">Is the server running? <span class="num">npm start</span> (port 3100).</p></section>`;
   }
 })();

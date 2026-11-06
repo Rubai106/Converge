@@ -41,6 +41,7 @@ d.cases.push(fresh);
 writeFileSync(dataFile, JSON.stringify(d, null, 2));
 
 let child;
+let token; // P0 (2026-11-07): every POST needs a session token.
 async function waitForServer() {
   for (let i = 0; i < 40; i++) {
     try { const r = await fetch(`${base}/api/status`); if (r.ok) return; } catch { /* not up yet */ }
@@ -49,7 +50,7 @@ async function waitForServer() {
   throw new Error('server did not start');
 }
 const post = (path, body) => fetch(`${base}${path}`, {
-  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token }, body: JSON.stringify(body),
 });
 
 test.before(async () => {
@@ -59,6 +60,7 @@ test.before(async () => {
     stdio: 'ignore',
   });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
 });
 test.after(() => { child?.kill(); });
 
@@ -86,11 +88,19 @@ test('H11: version submission adds S4 with its version field; mapping stays blin
   assert.ok(c.audit.some((a) => a.event === 'court-version-added' && a.sampleCode === 'S4' && a.version === 'zia'));
 });
 
-test('H11: version submission is human-only and blocked once ratings exist', async () => {
-  const agent = await post('/api/court/version', {
+test('H11: version submission needs a session token; a body actorKind is ignored', async () => {
+  // No token: 401, and no version is added.
+  const noToken = await fetch(`${base}/api/court/version`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ caseId: 'CRT-NEW', author: 'Agent', ingredients: { salt: 'x' } }),
+  });
+  assert.equal(noToken.status, 401);
+  // A body that claims actorKind 'agent' is ignored: the session actor
+  // is human, so the submission succeeds (S5 on CRT-NEW).
+  const agentBody = await post('/api/court/version', {
     caseId: 'CRT-NEW', author: 'Agent', ingredients: { salt: 'x' }, actorKind: 'agent',
   });
-  assert.equal(agent.status, 400);
+  assert.equal(agentBody.status, 201);
   const rated = await post('/api/court/version', {
     caseId: 'CRT-QA', author: 'Late', ingredients: { salt: 'x' }, actorKind: 'human',
   });
@@ -135,14 +145,19 @@ test('H12: adopt endpoint records the canonical version and audit event', async 
   assert.equal(r.status, 200);
   const body = await r.json();
   assert.equal(body.canonicalVersion, 'card');
-  assert.equal(body.adoption.adoptedBy, 'Mara (owner)');
+  assert.equal(body.adoption.adoptedBy, 'Mara · Owner');
   const c = await (await fetch(`${base}/api/cases/CRT-007`)).json();
   assert.equal(c.canonicalVersion, 'card');
   assert.equal(c.versions.length, 3);
   assert.ok(c.audit.some((a) => a.event === 'court-adopted-canonical'));
-  // Second adoption is rejected; agent and incomplete cases are rejected.
+  // Second adoption is rejected; unauthenticated adoption is rejected;
+  // incomplete cases and non-COURT cases are rejected.
   assert.equal((await post('/api/court/adopt', { caseId: 'CRT-007', actorKind: 'human' })).status, 400);
-  assert.equal((await post('/api/court/adopt', { caseId: 'CRT-007', actorKind: 'agent' })).status, 400);
+  const noToken = await fetch(`${base}/api/court/adopt`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ caseId: 'CRT-QA' }),
+  });
+  assert.equal(noToken.status, 401);
   assert.equal((await post('/api/court/adopt', { caseId: 'CRT-QA', actorKind: 'human' })).status, 400);
   assert.equal((await post('/api/court/adopt', { caseId: 'HAG-014', actorKind: 'human' })).status, 404);
 });

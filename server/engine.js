@@ -1,10 +1,17 @@
 // CONVERGE shared decision engine — deterministic, no LLM maths.
 // All money is calculated here, never by an LLM. Gross profit is shown
 // separately from net profit; assumptions and units travel with every number.
+import { createHash } from 'node:crypto';
 
 export const STATES = [
   'DRAFT','INTAKE','INVESTIGATING','DISCUSSION','PROPOSAL',
   'AWAITING_APPROVAL','APPROVED','COMPLETED','REJECTED','BLOCKED','CANCELLED',
+  // P0 (2026-11-07): WITHDRAWN / EXPIRED are additions, not a rewrite —
+  // the eleven existing states stay (the demo data and the test suite
+  // depend on them). Mapping for the brief's suggested names:
+  // UNDER_REVIEW is covered by INVESTIGATING/DISCUSSION, and
+  // PENDING_APPROVAL is AWAITING_APPROVAL.
+  'WITHDRAWN','EXPIRED',
 ];
 
 // Validated state transitions. Agents may never skip AWAITING_APPROVAL.
@@ -14,12 +21,14 @@ export const TRANSITIONS = {
   INVESTIGATING: ['DISCUSSION','BLOCKED','CANCELLED'],
   DISCUSSION: ['PROPOSAL','BLOCKED','CANCELLED'],
   PROPOSAL: ['AWAITING_APPROVAL','DISCUSSION','REJECTED','CANCELLED'],
-  AWAITING_APPROVAL: ['APPROVED','REJECTED','DISCUSSION'],
+  AWAITING_APPROVAL: ['APPROVED','REJECTED','DISCUSSION','WITHDRAWN','EXPIRED'],
   APPROVED: ['COMPLETED','BLOCKED'],
   COMPLETED: [],
   REJECTED: ['DISCUSSION','CANCELLED'],
   BLOCKED: ['INTAKE','INVESTIGATING','DISCUSSION','CANCELLED'],
   CANCELLED: [],
+  WITHDRAWN: [],
+  EXPIRED: [],
 };
 
 export function canTransition(from, to) {
@@ -37,6 +46,14 @@ export function transitionCase(c, to, actor) {
   if (to === 'APPROVED' && !c.pendingApproval) {
     throw new Error('No pending approval to approve. A proposal must be submitted first.');
   }
+  // Backstop for the TTL: the server expires stale proposals on read /
+  // transition, but a direct engine call must refuse an expired one too.
+  if (to === 'APPROVED' && c.pendingApproval?.requestedAt
+    && Date.now() - new Date(c.pendingApproval.requestedAt).getTime() > PROPOSAL_TTL_MS) {
+    throw new Error('This proposal has expired — resubmit it before approving.');
+  }
+  // The approval must match the submitted proposal record, hash for hash.
+  if (to === 'APPROVED') verifyApprovalHash(c);
   const from = c.state;
   c.state = to;
   if (to === 'APPROVED') c.approval = { ...c.pendingApproval, approvedBy: actor.name, approvedAt: new Date().toISOString() };
@@ -69,6 +86,84 @@ export function audit(c, actor, event, detail = {}) {
   c.audit = c.audit || [];
   c.audit.push({ at: new Date().toISOString(), actor: actor?.name || 'system', kind: actor?.kind || 'system', event, ...detail });
   return c.audit[c.audit.length - 1];
+}
+
+// ---------- Proposals: versioning, content hash, expiry (P0, 2026-11-07) ----------
+// A submitted proposal is a real record, not a positional P-number plus
+// free text. The approval binds to {proposalId, version, contentHash};
+// an approval whose hash does not match the stored record is rejected,
+// so an approval can never authorise terms that were never proposed.
+// inputHash = SHA-256 of the canonical JSON of the case input + the
+// strategy at submit time; contentHash = SHA-256 of the canonical JSON
+// of the proposal record's identity fields. Canonical JSON sorts object
+// keys recursively, so the hash is stable across serialisations.
+export const PROPOSAL_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+export function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+}
+export function sha256Hex(text) {
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+export function proposalInputHash(input, strategy) {
+  return sha256Hex(canonicalJson({ input, strategy }));
+}
+export function proposalContentHash(record) {
+  return sha256Hex(canonicalJson({
+    id: record.id, version: record.version, strategyId: record.strategyId,
+    terms: record.terms, inputHash: record.inputHash,
+  }));
+}
+
+// Expire a stale pending proposal: a case that has waited in
+// AWAITING_APPROVAL longer than the TTL moves to EXPIRED with an audit
+// event. Returns true when it expired the case. Legacy pending
+// approvals without a requestedAt predate versioning and cannot be aged,
+// so they are left alone (they can still be approved or rejected).
+export function expirePendingApproval(c, now = new Date()) {
+  const p = c.pendingApproval;
+  if (!p || !p.requestedAt) return false;
+  if (c.state !== 'AWAITING_APPROVAL') return false;
+  if (new Date(now).getTime() - new Date(p.requestedAt).getTime() <= PROPOSAL_TTL_MS) return false;
+  const from = c.state;
+  c.state = 'EXPIRED';
+  c.pendingApproval = null;
+  audit(c, { name: 'system', kind: 'system' }, `state:${from}->EXPIRED`, { reason: 'proposal-expired', proposalId: p.proposalId, version: p.version });
+  return true;
+}
+
+// Verify a pending approval against its stored proposal record before
+// it may be approved. Throws on any mismatch. Legacy pending approvals
+// (no contentHash) predate versioning and are approved on the human
+// gate alone — the record they reference was never hashed.
+export function verifyApprovalHash(c) {
+  const p = c.pendingApproval;
+  if (!p || !p.contentHash) return;
+  const rec = (c.proposals || []).find((x) => x.id === p.proposalId && x.version === p.version);
+  if (!rec) {
+    throw new Error('No proposal record matches this pending approval — it cannot be verified.');
+  }
+  if (rec.contentHash !== p.contentHash) {
+    throw new Error('Approval does not match the submitted proposal (content hash mismatch).');
+  }
+  if (proposalContentHash(rec) !== rec.contentHash) {
+    throw new Error('The stored proposal record has been tampered with (content hash mismatch).');
+  }
+  // The case input must be unchanged since the proposal was submitted:
+  // recompute the strategy from the current input and re-hash.
+  if (c.workflow === 'HAGGLE' && c.input) {
+    const strategies = haggleStrategies(haggleAnalysis(c.input), c.input);
+    const strategy = strategies.find((s) => s.id === rec.strategyId);
+    if (!strategy) {
+      throw new Error('The approved strategy no longer exists for this case.');
+    }
+    if (proposalInputHash(c.input, strategy) !== rec.inputHash) {
+      throw new Error('The case input changed after the proposal was submitted — resubmit the proposal.');
+    }
+  }
 }
 
 const round2 = (n) => Math.round(n * 100) / 100;
@@ -134,9 +229,44 @@ export function haggleAnalysis(rawInput) {
   };
 }
 
+// Strategy prices are DERIVED from the case input and the owner mandate
+// (P0, 2026-11-07) — the old $0.19/$0.21/$0.18/$0.20 constants were the
+// seed case's prices and were meaningless for any wizard-created case.
+//   freeze:      hold the old price (unchanged)
+//   counter:     midpoint between targetPrice and maxApprovedPrice,
+//                capped at maxApprovedPrice
+//   volume:      a 10% discount on the new price
+//   alternative: 25% below the new price (a second supplier's quote)
+//   gradual:     a step from the new price toward maxApprovedPrice,
+//                landing at the ceiling (never above it)
+//   substitute:  trial at the old price (unchanged)
+// Strategy ids stay as they are (the P-number mapping and the client
+// depend on them); the names and details carry the derived prices.
+// Every strategy carries unitPrice, duration and unit so the client can
+// compute the approval terms as money(unitPrice) + ' / ' + unit +
+// ' for ' + duration. The recommendation is computed from the
+// strategy's own food-cost % against the target — no hardcoded "stays
+// under the 30% target" text.
 export function haggleStrategies(analysis, rawInput) {
   const input = normalizeHaggleInputs(rawInput);
-  const { monthlySales, menuPrice } = input;
+  const { monthlySales, menuPrice, newPrice, oldPrice, unit } = input;
+  const target = input.targetFoodCostPct;
+  // The owner mandate is optional for the engine: a case created through
+  // the API always carries targetPrice/maxApprovedPrice (creation
+  // validates them), but a partial input — a regression fixture, a
+  // read-only strategy listing — must not throw (engine-edge BUG-2 pins
+  // this: haggleStrategies must not crash on an input the analysis
+  // accepted). Fall back to the prices the mandate would most plausibly
+  // be: the target is the old (pre-rise) price, the ceiling is the
+  // supplier's new price. Both are finite here — normalizeHaggleInputs
+  // already validated old/newPrice.
+  const targetPrice = Number.isFinite(Number(input.targetPrice)) ? Number(input.targetPrice) : oldPrice;
+  const maxApprovedPrice = Number.isFinite(Number(input.maxApprovedPrice)) ? Number(input.maxApprovedPrice) : newPrice;
+  const counterPrice = round4(Math.min((targetPrice + maxApprovedPrice) / 2, maxApprovedPrice));
+  const volumePrice = round4(newPrice * 0.9);
+  const alternativePrice = round4(newPrice * 0.75);
+  const gradualPrice = round4(Math.min(maxApprovedPrice, newPrice));
+  const money2 = (n) => `$${Number(n).toFixed(2)}`;
   const atPrice = (unitPrice) => {
     const cream = round4(unitPrice * input.qtyPerServing);
     const total = round2(cream + input.otherIngredientsCostPerServing);
@@ -147,14 +277,27 @@ export function haggleStrategies(analysis, rawInput) {
       savingVsNewPerMonth: round2((analysis.newCreamCostPerServing - cream) * monthlySales),
     };
   };
-  return [
-    { id: 'freeze', name: 'Price freeze', detail: `Hold $${input.oldPrice.toFixed(2)} for 4 weeks in exchange for a volume commitment.`, ...atPrice(input.oldPrice), recommendation: 'Best if the supplier values the volume commitment.' },
-    { id: 'counter-019', name: 'Accept a counter at $0.19', detail: 'Supplier counter-offer: $0.19/fl oz for 6 weeks, in writing.', ...atPrice(0.19), recommendation: 'Balanced: stays under the 30% food-cost target.' },
-    { id: 'volume-021', name: 'Volume discount at $0.21', detail: 'Commit to 25 L/week for $0.21/fl oz.', ...atPrice(0.21), recommendation: 'Useful if the freeze is refused and storage allows it.' },
-    { id: 'alternative-018', name: 'Alternative supplier at $0.18', detail: 'Seeded quote from a second supplier, same quality grade. Verify before switching.', ...atPrice(0.18), recommendation: 'Strong fallback; verify quality and delivery before committing.', unverified: true },
-    { id: 'gradual', name: 'Gradual adjustment to $0.20', detail: '$0.20/fl oz now, reviewed in 4 weeks. This is the owner\'s max approved price.', ...atPrice(0.20), recommendation: 'Ceiling option — never exceed without a new approval.' },
-    { id: 'substitute', name: 'Ingredient substitution', detail: 'Trial a lower-cost cream blend on one dish only. Quality risk: taste/texture may change; test before any menu change.', ...atPrice(input.oldPrice), recommendation: 'Only as a tested trial, never as a silent swap.', risk: 'Quality risk — requires a blind taste test first.' },
-  ];
+  // Recommendation, computed from the strategy's own figures: whether
+  // its food-cost % sits within the target, plus one line of guidance.
+  const recommend = (s, note) => {
+    const within = s.foodCostPct <= target;
+    return `Food cost ${s.foodCostPct}% vs the ${target}% target — ${within ? 'within target' : 'above target'}. ${note}`;
+  };
+  const freeze = { id: 'freeze', name: 'Price freeze', detail: `Hold ${money2(oldPrice)} / ${unit} for 4 weeks in exchange for a volume commitment.`, duration: '4 weeks', unit, ...atPrice(oldPrice) };
+  freeze.recommendation = recommend(freeze, 'Best if the supplier values the volume commitment.');
+  const counter = { id: 'counter-019', name: `Accept a counter at ${money2(counterPrice)}`, detail: `Supplier counter-offer: ${money2(counterPrice)} / ${unit} for 6 weeks, in writing.`, duration: '6 weeks', unit, ...atPrice(counterPrice) };
+  counter.recommendation = recommend(counter, 'A negotiated middle ground; get it in writing.');
+  const volume = { id: 'volume-021', name: `Volume discount at ${money2(volumePrice)}`, detail: `Commit to a weekly volume for 4 weeks at ${money2(volumePrice)} / ${unit}.`, duration: '4 weeks', unit, ...atPrice(volumePrice) };
+  volume.recommendation = recommend(volume, 'Useful if the freeze is refused and storage allows it.');
+  const alternative = { id: 'alternative-018', name: `Alternative supplier at ${money2(alternativePrice)}`, detail: `Seeded quote from a second supplier at ${money2(alternativePrice)} / ${unit}, same quality grade. Verify before switching.`, duration: '4 weeks', unit, unverified: true, ...atPrice(alternativePrice) };
+  alternative.recommendation = recommend(alternative, 'Strong fallback; verify quality and delivery before committing.');
+  const gradual = { id: 'gradual', name: `Gradual adjustment to ${money2(gradualPrice)}`, detail: maxApprovedPrice < newPrice
+    ? `${money2(gradualPrice)} / ${unit} now, reviewed in 4 weeks. This is the owner's max approved price.`
+    : `${money2(gradualPrice)} / ${unit} now, reviewed in 4 weeks.`, duration: '4 weeks', unit, ...atPrice(gradualPrice) };
+  gradual.recommendation = recommend(gradual, 'Ceiling option — never exceed without a new approval.');
+  const substitute = { id: 'substitute', name: 'Ingredient substitution', detail: 'Trial a lower-cost cream blend on one dish only. Quality risk: taste/texture may change; test before any menu change.', duration: 'trial', unit, risk: 'Quality risk — requires a blind taste test first.', ...atPrice(oldPrice) };
+  substitute.recommendation = recommend(substitute, 'Only as a tested trial, never as a silent swap.');
+  return [freeze, counter, volume, alternative, gradual, substitute];
 }
 
 // ---------- COURT: conflict detection + blind tally ----------

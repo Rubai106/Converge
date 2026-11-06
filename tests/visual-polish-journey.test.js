@@ -135,10 +135,13 @@ test('visual: CORRECTION guides the user to the claims', { timeout: 120000 }, as
     }, null, { timeout: 15000 });
     const nextStep = await page.$eval('.next-step-panel', (el) => el.innerText);
     assert.ok(nextStep.includes('3 of 3 claims are still unresolved'), 'Next step names the unresolved claims');
-    const primary = await page.$eval('.move-to .btn', (el) => el.innerText.trim());
+    // The header primary action (data-goto-tab) — the Advance button
+    // sits beside it for early cases, so the plain .btn selector would
+    // pick Advance instead.
+    const primary = await page.$eval('.move-to .btn[data-goto-tab]', (el) => el.innerText.trim());
     assert.equal(primary, 'Review the claims →');
     await shot(page, 'visual-03-correction-overview.png');
-    await page.click('.move-to .btn');
+    await page.click('.move-to .btn[data-goto-tab]');
     await page.waitForFunction(() => {
       const tab = document.querySelector('#tab-negotiation');
       return tab && tab.classList.contains('is-active');

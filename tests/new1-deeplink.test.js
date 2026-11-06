@@ -71,7 +71,7 @@ async function waitForServer() {
 
 async function createCaseAfterBoot() {
   const r = await fetch(`${base}/api/cases`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify(validPayload),
   });
   assert.equal(r.status, 201, 'case creation should succeed');
@@ -90,10 +90,21 @@ async function waitForHeading(page, re, timeout = 10000) {
   }, re.source, { timeout });
 }
 
+let token; // P0 (2026-11-07): case creation needs a session token.
+async function newCtx() {
+  // The server issues at most 5 sessions a minute per instance, and
+  // every fresh browser context boots a new session — five page boots
+  // would burn the bucket and the last boot would 429. Seed the one
+  // token from before() into each context's sessionStorage instead.
+  const ctx = await browser.newContext();
+  await ctx.addInitScript((t) => sessionStorage.setItem('converge-session-token', t), token);
+  return ctx;
+}
 test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(seedData()));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
   browser = await chromium.launch();
 });
 
@@ -104,7 +115,7 @@ test.after(async () => {
 });
 
 test('new1: direct navigation to a case created after boot shows that case, not the previous one', { timeout: 30000 }, async () => {
-  const ctx = await browser.newContext();
+  const ctx = await newCtx();
   const page = await ctx.newPage();
   await page.goto(base + '/');
   await page.waitForSelector('#view h1');
@@ -121,7 +132,7 @@ test('new1: direct navigation to a case created after boot shows that case, not 
 
 test('new1: refresh on a case URL shows that case', { timeout: 30000 }, async () => {
   const id = await createCaseAfterBoot();
-  const ctx = await browser.newContext();
+  const ctx = await newCtx();
   const page = await ctx.newPage();
   await page.goto(`${base}/#/case/${id}`);
   await waitForHeading(page, new RegExp(`^${id}`));
@@ -133,7 +144,7 @@ test('new1: refresh on a case URL shows that case', { timeout: 30000 }, async ()
 
 test('new1: browser back/forward between cases resolves the correct case each time', { timeout: 30000 }, async () => {
   const id = await createCaseAfterBoot();
-  const ctx = await browser.newContext();
+  const ctx = await newCtx();
   const page = await ctx.newPage();
   await page.goto(base + '/');
   await page.waitForSelector('#view h1');
@@ -151,7 +162,7 @@ test('new1: browser back/forward between cases resolves the correct case each ti
 });
 
 test('new1: unknown case ID shows "case not found", never a stale case', { timeout: 30000 }, async () => {
-  const ctx = await browser.newContext();
+  const ctx = await newCtx();
   const page = await ctx.newPage();
   await page.goto(base + '/');
   await page.waitForSelector('#view h1');
@@ -170,7 +181,7 @@ test('new1: unknown case ID shows "case not found", never a stale case', { timeo
 });
 
 test('new1: a loading indicator is shown while the detail is being fetched', { timeout: 30000 }, async () => {
-  const ctx = await browser.newContext();
+  const ctx = await newCtx();
   const page = await ctx.newPage();
   await page.goto(base + '/');
   await page.waitForSelector('#view h1');

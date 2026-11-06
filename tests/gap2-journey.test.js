@@ -27,6 +27,7 @@ const scratchDir = mkdtempSync(join(tmpdir(), 'converge-gap2-journey-'));
 const dataFile = join(scratchDir, 'converge.json');
 let child;
 let browser;
+let token;
 
 async function waitForServer() {
   for (let i = 0; i < 40; i++) {
@@ -55,6 +56,8 @@ test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(seedData()));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  // P0 (2026-11-07): the API case creation in test 2 needs a session token.
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
   browser = await chromium.launch();
 });
 
@@ -125,56 +128,58 @@ test('gap2: UI-only wizard-to-approval journey (create, submit, approve, complet
     await page.click('[data-tab="negotiation"]');
     await page.waitForSelector('tr[data-strategy="counter-019"]');
     await page.click('tr[data-strategy="counter-019"]');
-    await waitForText(page, '#impact-panel', /Accept a counter at \$0\.19/);
+    await waitForText(page, '#impact-panel', /Accept a counter at \$0\.18/);
     const impact = await page.$eval('#impact-panel', (el) => el.innerText);
-    assert.ok(impact.includes('$1.14'), 'impact panel shows the counter-019 cream cost $1.14/serving');
-    assert.ok(impact.includes('29.75%'), 'impact panel shows food cost 29.75%');
+    assert.ok(impact.includes('$1.08'), 'impact panel shows the counter-019 cream cost $1.08/serving');
+    assert.ok(impact.includes('29.38%'), 'impact panel shows food cost 29.38%');
     // 5. Submit for approval — the button shows the exact terms.
     const submitLabel = await page.$eval('#submit-btn', (el) => el.innerText.trim());
     assert.equal(submitLabel, 'Submit for approval');
-    assert.ok(impact.includes('$0.19/fl oz for 6 weeks, in writing'), 'the exact proposed terms are shown above the button');
+    assert.ok(impact.includes('$0.18 / fl oz for 6 weeks'), 'the exact proposed terms are shown above the button');
     await shot(page, 'gap2-04-selected-submit.png');
     await page.click('#submit-btn');
     await page.waitForSelector('#approve-btn', { timeout: 15000 });
     const approveLabel = await page.$eval('#approve-btn', (el) => el.innerText.trim());
-    assert.match(approveLabel, /^Approve \$0\.19 \/ fl oz · 6 weeks$/);
+    assert.match(approveLabel, /^Approve \$0\.18 \/ fl oz · 6 weeks$/);
     // The pending proposal is visible in the Approvals rail.
-    await waitForText(page, '#view', /Pending: \$0\.19\/fl oz for 6 weeks, in writing/);
+    // (Server terms: the stored pendingApproval.terms, now canonical.)
+    await waitForText(page, '#view', /Pending: \$0\.18 \/ fl oz for 6 weeks/);
     await shot(page, 'gap2-05-submitted-awaiting.png');
     // 6. The approval modal: terms, financial consequences,
     // recommendation and mandate compliance.
     await page.click('#approve-btn');
     await page.waitForSelector('#modal-backdrop:not([hidden])');
     const modalTerms = await page.$eval('#modal-terms', (el) => el.innerText);
-    assert.ok(modalTerms.includes('$0.19/fl oz for 6 weeks, in writing'), 'modal restates the exact terms');
+    assert.ok(modalTerms.includes('$0.18 / fl oz for 6 weeks'), 'modal restates the exact terms');
     const modalImpact = await page.$eval('#modal-impact', (el) => el.innerText);
-    assert.ok(modalImpact.includes('+$0.18 / serving'), `modal shows +$0.18/serving (got: ${modalImpact})`);
-    assert.ok(modalImpact.includes('+$28.80 / month'), 'modal shows +$28.80/month');
-    assert.ok(modalImpact.includes('food cost 29.75%'), 'modal shows food cost 29.75%');
+    assert.ok(modalImpact.includes('+$0.12 / serving'), `modal shows +$0.12/serving (got: ${modalImpact})`);
+    assert.ok(modalImpact.includes('+$19.20 / month'), 'modal shows +$19.20/month');
+    assert.ok(modalImpact.includes('food cost 29.38%'), 'modal shows food cost 29.38%');
     assert.ok(modalImpact.includes('within mandate max $0.20'), 'modal shows mandate compliance');
     const modalRec = await page.$eval('#modal-recommendation', (el) => el.innerText);
-    assert.ok(modalRec.includes('Balanced: stays under the 30% food-cost target.'), 'modal shows the recommendation');
+    assert.ok(modalRec.includes('Food cost 29.38% vs the 30% target — within target'), 'modal shows the recommendation');
     await shot(page, 'gap2-06-approval-modal.png');
     // 7. Human approve -> APPROVED, audit tab shows the signed sentence.
+    // (Server terms: the stored approval.terms, now canonical.)
     await page.click('#modal-confirm');
-    await waitForText(page, '#view', /I approve \$0\.19\/fl oz for 6 weeks, in writing\./, 15000);
+    await waitForText(page, '#view', /I approve \$0\.18 \/ fl oz for 6 weeks\./, 15000);
     await shot(page, 'gap2-07-approved-audit.png');
     // 8. Analysis: the financial impact panel reflects the APPROVED
     // strategy, not the unmitigated supplier shock. (The chart moved
     // here from the Overview in 2026-11-06; the Overview keeps the
     // same figures as key figures.)
     await page.click('[data-tab="analysis"]');
-    await waitForText(page, '#view', /Approved terms: \$0\.19\/fl oz for 6 weeks, in writing/);
+    await waitForText(page, '#view', /Approved terms: \$0\.18 \/ fl oz for 6 weeks/);
     const hero = await page.$eval('.hero', (el) => el.innerText);
-    assert.ok(hero.includes('+$0.18'), `hero shows the approved +$0.18/serving (got: ${hero})`);
+    assert.ok(hero.includes('+$0.12'), `hero shows the approved +$0.12/serving (got: ${hero})`);
     assert.ok(!hero.includes('+$0.48'), 'hero must NOT show the unmitigated +$0.48/serving');
     await shot(page, 'gap2-08-approved-impact.png');
     // The Overview shows the same approved figures as key figures.
     await page.click('[data-tab="overview"]');
-    await waitForText(page, '#view', /Approved terms: \$0\.19\/fl oz for 6 weeks, in writing/);
+    await waitForText(page, '#view', /Approved terms: \$0\.18 \/ fl oz for 6 weeks/);
     const keyFigures = await page.$eval('.key-figures', (el) => el.innerText);
-    assert.ok(keyFigures.includes('+$0.18'), `key figures show +$0.18/serving (got: ${keyFigures})`);
-    assert.ok(keyFigures.includes('29.75%'), 'key figures show the approved food cost 29.75%');
+    assert.ok(keyFigures.includes('+$0.12'), `key figures show +$0.12/serving (got: ${keyFigures})`);
+    assert.ok(keyFigures.includes('29.38%'), 'key figures show the approved food cost 29.38%');
     // 9. Mark completed -> COMPLETED; the audit history is correct.
     await page.click('[data-tab="negotiation"]');
     await page.waitForSelector('#complete-btn');
@@ -193,8 +198,8 @@ test('gap2: UI-only wizard-to-approval journey (create, submit, approve, complet
     const d = await (await fetch(`${base}/api/cases/${caseId}`)).json();
     assert.equal(d.state, 'COMPLETED');
     assert.equal(d.approval.proposalId, 'P2');
-    assert.equal(d.approval.terms, '$0.19/fl oz for 6 weeks, in writing');
-    assert.equal(d.approval.approvedBy, 'Mara (owner)');
+    assert.equal(d.approval.terms, '$0.18 / fl oz for 6 weeks');
+    assert.equal(d.approval.approvedBy, 'Mara · Owner');
     assert.equal(d.pendingApproval, null);
     assert.equal(errors.length, 0, `no page/console errors during the journey (got: ${errors.join(' | ')})`);
   } finally {
@@ -216,7 +221,7 @@ test('gap2: drawer post refreshes the audit tab without a reload (staleness fix)
   try {
     // A fresh case created via the API (setup only — the UI drives the rest).
     const created = await (await fetch(`${base}/api/cases`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
       body: JSON.stringify({
         supplier: 'GreenFields', ingredient: 'butter', recipe: '',
         oldPrice: 0.16, newPrice: 0.24, unit: 'fl oz', qtyPerServing: 6,

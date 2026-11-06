@@ -36,7 +36,7 @@
         </label>
         <span class="switch-pill" id="switch-pill" title="Simulated stub — not a live Switch connection">● SIMULATED-STUB</span>
         <button class="ghost-btn btn-sm" id="switch-recheck" hidden>Recheck connection</button>
-        <span class="user-chip" title="Demo identity — Mara (owner). No sign-in; every visitor sees the same identity">Mara · Owner</span>
+        <span class="user-chip" id="user-chip" title="Signed-in identity from the session — Mara (owner).">Mara · Owner</span>
       </div>
     </header>
     <p class="switch-note" id="switch-note" hidden></p>
@@ -62,7 +62,7 @@
 
 <!-- Switch room drawer -->
 <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
-<aside class="drawer" id="room-drawer" aria-label="Switch room" hidden>
+<aside class="drawer" id="room-drawer" role="dialog" aria-modal="true" aria-label="Switch room" hidden>
   <div class="drawer-head">
     <div>
       <h2 id="drawer-title">Switch room</h2>

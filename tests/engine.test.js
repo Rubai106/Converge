@@ -25,9 +25,15 @@ test('HAGGLE strategies are deterministic and priced', () => {
   const a = haggleAnalysis(input);
   const s = haggleStrategies(a, input);
   const counter = s.find((x) => x.id === 'counter-019');
-  assert.equal(counter.unitPrice, 0.19);
-  assert.equal(counter.savingVsNewPerMonth, 48);
-  assert.equal(counter.foodCostPct, 29.75);
+  // P0 (2026-11-07): the counter is derived, not hardcoded — the midpoint
+  // of the target price (0.16) and the max-approved price (0.20).
+  assert.equal(counter.unitPrice, 0.18);
+  assert.equal(counter.savingVsNewPerMonth, 57.6);
+  assert.equal(counter.foodCostPct, 29.38);
+  assert.equal(counter.duration, '6 weeks');
+  assert.equal(counter.unit, 'fl oz');
+  assert.equal(s.find((x) => x.id === 'volume-021').unitPrice, 0.216);
+  assert.match(counter.recommendation, /Food cost 29\.38% vs the 30% target — within target/);
   assert.ok(s.find((x) => x.id === 'freeze').extraVsOldPerMonth === 0);
 });
 

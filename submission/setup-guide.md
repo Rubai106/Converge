@@ -11,7 +11,7 @@ git clone https://github.com/Rubai106/accordweave.git
 cd accordweave
 npm install                  # installs Playwright (devDependency)
 npx playwright install chromium   # one-time browser download (see below)
-npm test               # expect 161/161
+npm test               # expect 294/294 (verified 2026-11-07)
 npm run check          # node --check on server files
 PORT=3100 npm start
 # open http://localhost:3100
@@ -19,8 +19,9 @@ PORT=3100 npm start
 (Port 3000 is the Switch gateway, not the app.)
 
 ## Browser tests (Windows and Linux)
-Three test files drive a real browser (GAP-2 journey, NEW-1 deep links,
-staleness refresh). They use the `playwright` package, which finds its
+Six test files drive a real browser (GAP-2 journey, NEW-1 deep links,
+staleness refresh, UX polish journey, visual polish journey, dark
+redesign journey). They use the `playwright` package, which finds its
 own Chromium per OS — no paths to edit, no manual `npm start` before
 `npm test` (each test spawns its own server on an isolated seed file
 in a temp dir; the repo's `data/converge.json` is gitignored and is
@@ -79,6 +80,13 @@ Verify: `/api/status` → `switchMode: REAL-SWITCH`, health `{ok: true}`.
 - `SWITCH_API_KEY` (real agent key; never commit it)
 - `SWITCH_AGENT_ID` (real agent id; never commit it)
 - `SWITCH_BRIDGE_ID` (optional; defaults to the first active bridge)
+
+Ports are deployment-specific and come from the environment, not the
+code: on this VM the Switch stack is gateway 3000 / core API 8000 /
+Mattermost 8065 / Postgres 5432; on the developer's Windows PC the same
+services run on 60911–60914 (gateway 60911, API 60912, Mattermost 60913,
+Postgres 60914). Point `SWITCH_BASE_URL` at the core API port for the
+machine you are on.
 
 ## Demo data
 Seeded fictional cases in `data/converge.json` (created on first run):

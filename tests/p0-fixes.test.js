@@ -186,6 +186,7 @@ test('C3: load() clears a stale pendingApproval off AWAITING_APPROVAL cases and 
 
 // ---------- C1: live server ----------
 let child;
+let token; // P0 (2026-11-07): every POST needs a session token.
 
 async function waitForServer() {
   for (let i = 0; i < 40; i++) {
@@ -210,6 +211,7 @@ test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(d, null, 2));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
 });
 
 test.after(() => {
@@ -219,7 +221,7 @@ test.after(() => {
 
 test('C1: POST /api/court/rate with the old sample field 400s (Unknown sample undefined)', async () => {
   const r = await fetch(`${base}/api/court/rate`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'CRT-P0', reader: 'Reader B', sample: 'S3', scores: { taste: 5, texture: 5, aroma: 5, appearance: 5, difficulty: 5, overall: 5 } }),
   });
   assert.equal(r.status, 400);
@@ -229,7 +231,7 @@ test('C1: POST /api/court/rate with the old sample field 400s (Unknown sample un
 
 test('C1: POST /api/court/rate with sampleCode succeeds and reports submitted', async () => {
   const r = await fetch(`${base}/api/court/rate`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'CRT-P0', reader: 'Reader B', sampleCode: 'S2', scores: { taste: 5, texture: 5, aroma: 5, appearance: 5, difficulty: 5, overall: 5 } }),
   });
   assert.equal(r.status, 200);

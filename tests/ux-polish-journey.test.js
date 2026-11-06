@@ -30,6 +30,7 @@ const scratchDir = mkdtempSync(join(tmpdir(), 'converge-ux-polish-'));
 const dataFile = join(scratchDir, 'converge.json');
 let child;
 let browser;
+let token; // P0 (2026-11-07): the API case creations need a session token.
 
 // Rubai's exact HAG-015 inputs from his Windows run.
 const extremePayload = {
@@ -75,6 +76,7 @@ test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(seedData()));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
   browser = await chromium.launch();
 });
 
@@ -86,7 +88,7 @@ test.after(async () => {
 
 test('ux: a 600% food cost stays inside the chart at desktop size', { timeout: 120000 }, async () => {
   const created = await (await fetch(`${base}/api/cases`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(extremePayload),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token }, body: JSON.stringify(extremePayload),
   })).json();
   assert.equal(created.analysis.newFoodCostPct, 600, 'the engine still computes 600%');
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -134,7 +136,7 @@ test('ux: a 600% food cost stays inside the chart at desktop size', { timeout: 1
 
 test('ux: the extreme case does not overflow the page at mobile size', { timeout: 120000 }, async () => {
   const created = await (await fetch(`${base}/api/cases`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...extremePayload, supplier: 'dc2' }),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token }, body: JSON.stringify({ ...extremePayload, supplier: 'dc2' }),
   })).json();
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await ctx.newPage();
@@ -221,7 +223,7 @@ test('ux: the wizard flags the extreme inputs and needs an acknowledgement', { t
 
 test('ux: the Move dropdown offers no PROPOSAL and the header guides to Negotiation', { timeout: 120000 }, async () => {
   const created = await (await fetch(`${base}/api/cases`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...extremePayload, supplier: 'dc3' }),
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token }, body: JSON.stringify({ ...extremePayload, supplier: 'dc3' }),
   })).json();
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await ctx.newPage();

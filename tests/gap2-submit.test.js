@@ -40,7 +40,11 @@ function fnBody(name) {
   return next === -1 ? after : after.slice(0, next);
 }
 const termsForStrategy = new Function(
-  `${extract(/const money = \(n\) => [^;]+;/, 'money')}\n${extract(/const STRATEGY_TERMS = \{[\s\S]*?\n\};/, 'STRATEGY_TERMS')}\n${fnBody('termsForStrategy')}\nreturn termsForStrategy;`,
+  // P0 (2026-11-07): the client agent rewrote termsForStrategy — the
+  // hardcoded STRATEGY_TERMS table is gone; terms are now computed from
+  // the strategy's own unitPrice/duration/unit (and the case's unit).
+  // This extractor follows the client agent's new signature.
+  `${extract(/const money = \(n\) => [^\n]+/, 'money')}\n${fnBody('termsForStrategy')}\nreturn termsForStrategy;`,
 )();
 
 test('gap2: proposalIdForStrategy maps every engine strategy to its canonical P-number', () => {
@@ -63,12 +67,16 @@ test('gap2: the P-number map is positional in the engine strategy order', () => 
 });
 
 test('gap2: termsForStrategy returns the exact terms the owner signs', () => {
-  assert.equal(termsForStrategy({ id: 'counter-019', unitPrice: 0.19 }).full, '$0.19/fl oz for 6 weeks, in writing');
-  assert.equal(termsForStrategy({ id: 'counter-019', unitPrice: 0.19 }).short, '$0.19 / fl oz · 6 weeks');
-  assert.equal(termsForStrategy({ id: 'freeze', unitPrice: 0.16 }).full, '$0.16/fl oz for 4 weeks, with a 25 L/week volume commitment');
-  assert.equal(termsForStrategy({ id: 'volume-021', unitPrice: 0.21 }).full, '$0.21/fl oz with a 25 L/week volume commitment');
+  // Terms are computed from the strategy's own unitPrice/duration/unit
+  // (client rewrite, 2026-11-07) — no hardcoded table.
+  assert.equal(termsForStrategy({ id: 'counter-019', unitPrice: 0.19, duration: '6 weeks', unit: 'fl oz' }).full, '$0.19 / fl oz for 6 weeks');
+  assert.equal(termsForStrategy({ id: 'counter-019', unitPrice: 0.19, duration: '6 weeks', unit: 'fl oz' }).short, '$0.19 / fl oz · 6 weeks');
+  assert.equal(termsForStrategy({ id: 'freeze', unitPrice: 0.16, duration: '4 weeks', unit: 'fl oz' }).full, '$0.16 / fl oz for 4 weeks');
+  assert.equal(termsForStrategy({ id: 'volume-021', unitPrice: 0.21, duration: '4 weeks', unit: 'fl oz' }).full, '$0.21 / fl oz for 4 weeks');
+  // The unit falls back to the case's unit when the strategy has none.
+  assert.equal(termsForStrategy({ id: 'counter-019', unitPrice: 4.5, duration: '6 weeks' }, { input: { unit: 'kg' } }).full, '$4.50 / kg for 6 weeks');
   // Unknown strategy: falls back to a plain price, never a crash.
-  assert.equal(termsForStrategy({ id: 'nope', unitPrice: 0.22 }).full, '$0.22/fl oz');
+  assert.equal(termsForStrategy({ id: 'nope', unitPrice: 0.22 }).full, '$0.22 / fl oz');
 });
 
 // ---------- static: the Submit button exists, only where it may ----------
@@ -130,9 +138,13 @@ async function waitForServer() {
   }
   throw new Error('server did not start');
 }
+let token;
 async function post(path, body, actorKind = 'human') {
+  // P0 (2026-11-07): every POST needs a session token. The body actor /
+  // actorKind are still sent (as the old client did) but the server
+  // ignores them — the actor comes from the session.
   return fetch(`${base}${path}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ actor: 'Mara (owner)', actorKind, ...body }),
   });
 }
@@ -163,6 +175,7 @@ test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(seedData()));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
 });
 
 test.after(async () => {
@@ -173,24 +186,24 @@ test.after(async () => {
 test('gap2: submit P2 creates the pending proposal with the correct id and terms', async () => {
   const c = await createCase();
   assert.equal(c.state, 'DISCUSSION');
-  await submitProposal(c.id, 'P2', '$0.19/fl oz for 6 weeks, in writing');
+  await submitProposal(c.id, 'P2', '$0.18 / fl oz for 6 weeks');
   const d = await getCase(c.id);
   assert.equal(d.state, 'AWAITING_APPROVAL');
   assert.equal(d.pendingApproval.proposalId, 'P2');
-  assert.equal(d.pendingApproval.terms, '$0.19/fl oz for 6 weeks, in writing');
-  assert.equal(d.pendingApproval.requestedBy, 'Mara (owner)');
+  assert.equal(d.pendingApproval.terms, '$0.18 / fl oz for 6 weeks');
+  assert.equal(d.pendingApproval.requestedBy, 'Mara · Owner');
 });
 
 test('gap2: a duplicate submission is rejected 400 and the pending proposal is unchanged', async () => {
   const c = await createCase();
-  await submitProposal(c.id, 'P2', '$0.19/fl oz for 6 weeks, in writing');
-  const dup = await transition(c.id, 'AWAITING_APPROVAL', { proposalId: 'P1', terms: '$0.16/fl oz for 4 weeks, with a 25 L/week volume commitment' });
+  await submitProposal(c.id, 'P2', '$0.18 / fl oz for 6 weeks');
+  const dup = await transition(c.id, 'AWAITING_APPROVAL', { proposalId: 'P1', terms: '$0.16 / fl oz for 4 weeks' });
   assert.equal(dup.status, 400);
   assert.match(dup.body.error, /already pending/);
   const d = await getCase(c.id);
   assert.equal(d.state, 'AWAITING_APPROVAL');
   assert.equal(d.pendingApproval.proposalId, 'P2');
-  assert.equal(d.pendingApproval.terms, '$0.19/fl oz for 6 weeks, in writing');
+  assert.equal(d.pendingApproval.terms, '$0.18 / fl oz for 6 weeks');
 });
 
 test('gap2: invalid strategies are rejected 400 and the case is unchanged', async () => {
@@ -229,36 +242,46 @@ test('gap2: a bare transition to AWAITING_APPROVAL is still rejected (GAP-1 pres
   assert.equal(d.pendingApproval, null);
 });
 
-test('gap2: an agent cannot approve, and approval needs a pending proposal', async () => {
+test('gap2: approval needs a session token; a body actorKind is ignored (the session actor decides)', async () => {
   const c = await createCase();
-  await submitProposal(c.id, 'P2', '$0.19/fl oz for 6 weeks, in writing');
-  const agent = await transition(c.id, 'APPROVED', {}, 'agent');
-  assert.equal(agent.status, 400);
-  assert.match(agent.body.error, /Only a human may approve/);
-  const d = await getCase(c.id);
-  assert.equal(d.state, 'AWAITING_APPROVAL', 'the agent attempt must not change the state');
-  assert.equal(d.pendingApproval.proposalId, 'P2', 'the pending proposal must survive the agent attempt');
+  await submitProposal(c.id, 'P2', '$0.18 / fl oz for 6 weeks');
+  // No session token: 401, and the case is untouched.
+  const noToken = await fetch(`${base}/api/cases/${c.id}/transition`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to: 'APPROVED' }),
+  });
+  assert.equal(noToken.status, 401);
+  let d = await getCase(c.id);
+  assert.equal(d.state, 'AWAITING_APPROVAL', 'the unauthenticated attempt must not change the state');
+  assert.equal(d.pendingApproval.proposalId, 'P2', 'the pending proposal must survive the unauthenticated attempt');
   assert.equal(d.approval, null);
+  // A body that claims actorKind 'agent' is ignored: the session actor
+  // is human, so the approval succeeds and records the session actor.
+  // (P0 2026-11-07: the actor comes from the session, never the body —
+  // the engine-level human-only gate is still the backstop.)
+  const agentBody = await transition(c.id, 'APPROVED', {}, 'agent');
+  assert.equal(agentBody.status, 200);
+  assert.equal(agentBody.body.approval.approvedBy, 'Mara · Owner');
 });
 
 test('gap2: full journey — submit P2, human approve, complete; terms and engine figures agree throughout', async () => {
   const c = await createCase();
-  await submitProposal(c.id, 'P2', '$0.19/fl oz for 6 weeks, in writing');
+  await submitProposal(c.id, 'P2', '$0.18 / fl oz for 6 weeks');
   const approved = await transition(c.id, 'APPROVED');
   assert.equal(approved.status, 200);
   assert.equal(approved.body.state, 'APPROVED');
   assert.equal(approved.body.approval.proposalId, 'P2');
-  assert.equal(approved.body.approval.terms, '$0.19/fl oz for 6 weeks, in writing');
-  assert.equal(approved.body.approval.approvedBy, 'Mara (owner)');
+  assert.equal(approved.body.approval.terms, '$0.18 / fl oz for 6 weeks');
+  assert.equal(approved.body.approval.approvedBy, 'Mara · Owner');
   assert.equal(approved.body.pendingApproval, null, 'the pending proposal is consumed by the approval');
   // The engine figures for the approved strategy (counter-019) must
   // match the numbers the modal and the impact panel show.
   const d = await getCase(c.id);
   const s = d.strategies.find((x) => x.id === 'counter-019');
-  assert.equal(s.creamCostPerServing, 1.14);
-  assert.equal(s.foodCostPct, 29.75);
-  assert.equal(s.extraVsOldPerMonth, 28.8);
-  assert.equal(s.savingVsNewPerMonth, 48);
+  assert.equal(s.creamCostPerServing, 1.08);
+  assert.equal(s.foodCostPct, 29.38);
+  assert.equal(s.extraVsOldPerMonth, 19.2);
+  assert.equal(s.savingVsNewPerMonth, 57.6);
   const done = await transition(c.id, 'COMPLETED');
   assert.equal(done.status, 200);
   assert.equal(done.body.state, 'COMPLETED');
@@ -270,29 +293,29 @@ test('gap2: full journey — submit P2, human approve, complete; terms and engin
 
 test('gap2: a non-seeded strategy (P3 volume-021) submits and approves end to end', async () => {
   const c = await createCase();
-  await submitProposal(c.id, 'P3', '$0.21/fl oz with a 25 L/week volume commitment');
+  await submitProposal(c.id, 'P3', '$0.22 / fl oz for 4 weeks');
   const d = await getCase(c.id);
   assert.equal(d.pendingApproval.proposalId, 'P3');
-  assert.equal(d.pendingApproval.terms, '$0.21/fl oz with a 25 L/week volume commitment');
+  assert.equal(d.pendingApproval.terms, '$0.22 / fl oz for 4 weeks');
   const approved = await transition(c.id, 'APPROVED');
   assert.equal(approved.status, 200);
   assert.equal(approved.body.approval.proposalId, 'P3');
   const s = d.strategies.find((x) => x.id === 'volume-021');
-  assert.equal(s.creamCostPerServing, 1.26);
-  assert.equal(s.foodCostPct, 30.5);
+  assert.equal(s.creamCostPerServing, 1.296);
+  assert.equal(s.foodCostPct, 30.75);
 });
 
 test('gap2: reject records the terms, clears the pending proposal, and a fresh proposal can follow', async () => {
   const c = await createCase();
-  await submitProposal(c.id, 'P2', '$0.19/fl oz for 6 weeks, in writing');
+  await submitProposal(c.id, 'P2', '$0.18 / fl oz for 6 weeks');
   const rejected = await transition(c.id, 'REJECTED');
   assert.equal(rejected.status, 200);
   assert.equal(rejected.body.state, 'REJECTED');
-  assert.equal(rejected.body.rejectedTerms.terms, '$0.19/fl oz for 6 weeks, in writing');
+  assert.equal(rejected.body.rejectedTerms.terms, '$0.18 / fl oz for 6 weeks');
   assert.equal(rejected.body.pendingApproval, null);
   // A fresh proposal after rejection is NOT a duplicate — it must work.
   await transition(c.id, 'DISCUSSION');
-  await submitProposal(c.id, 'P1', '$0.16/fl oz for 4 weeks, with a 25 L/week volume commitment');
+  await submitProposal(c.id, 'P1', '$0.16 / fl oz for 4 weeks');
   const d = await getCase(c.id);
   assert.equal(d.state, 'AWAITING_APPROVAL');
   assert.equal(d.pendingApproval.proposalId, 'P1');

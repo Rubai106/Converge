@@ -63,7 +63,7 @@ test('M1: breadcrumb no longer duplicates the H1 on top-level views', () => {
     assert.ok(body.includes("setBreadcrumb('')"), `${fn} must clear the breadcrumb`);
   }
   assert.ok(js.includes('el.hidden = !html'), 'an empty breadcrumb must be hidden, not an empty nav landmark');
-  assert.ok(js.includes("setBreadcrumb(`<span class=\"crumb-soft\">Cases</span>"), 'case workspace keeps its non-duplicating parent crumb');
+  assert.ok(js.includes("setBreadcrumb(`<a href=\"#/cases\">Cases</a>"), 'case workspace keeps its non-duplicating parent crumb — now a link (L6, 2026-11-07)');
 });
 
 test('M3: "Needs a decision today" is split into approval vs discussion', () => {

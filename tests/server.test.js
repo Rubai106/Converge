@@ -19,6 +19,7 @@ const PORT = 3199;
 const base = `http://localhost:${PORT}`;
 
 let child;
+let token; // P0 (2026-11-07): every POST needs a session token.
 
 async function waitForServer() {
   for (let i = 0; i < 40; i++) {
@@ -42,6 +43,7 @@ test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(d, null, 2));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
 });
 
 test.after(() => {
@@ -62,12 +64,12 @@ test('COURT: seeded ratings are complete and the tally matches the seed', async 
 
 test('COURT: duplicate rating is rejected, invalid score is rejected', async () => {
   const dup = await fetch(`${base}/api/court/rate`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'CRT-007', reader: 'Reader A', sampleCode: 'S1', scores: { taste: 5, texture: 5, aroma: 5, appearance: 5, difficulty: 5, overall: 5 } }),
   });
   assert.equal(dup.status, 409);
   const bad = await fetch(`${base}/api/court/rate`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'CRT-007', reader: 'Reader A', sampleCode: 'S1', scores: { taste: 9, texture: 5, aroma: 5, appearance: 5, difficulty: 5, overall: 5 } }),
   });
   assert.equal(bad.status, 400);
@@ -106,7 +108,7 @@ test('COURT: /api/court/tally is case-bound and cannot bypass completeness', asy
     scores: { taste: 5, texture: 5, aroma: 5, appearance: 5, difficulty: 5, overall: 5 },
   }));
   const bypass = await (await fetch(`${base}/api/court/tally`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'CRT-TEST', ratings: fake }),
   })).json();
   assert.equal(bypass.tally, null);
@@ -115,15 +117,15 @@ test('COURT: /api/court/tally is case-bound and cannot bypass completeness', asy
   assert.equal(bypass.expected, 9);
   // The complete case still returns its real tally from stored ratings.
   const done = await (await fetch(`${base}/api/court/tally`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'CRT-007' }),
   })).json();
   assert.equal(done.complete, true);
   assert.equal(done.tally.S1.means.overall, 4.67);
   assert.equal(done.tally.S3.means.overall, 3.33);
   // Unknown or non-COURT cases are rejected.
-  assert.equal((await fetch(`${base}/api/court/tally`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })).status, 404);
-  assert.equal((await fetch(`${base}/api/court/tally`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: 'HAG-014' }) })).status, 404);
+  assert.equal((await fetch(`${base}/api/court/tally`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token }, body: JSON.stringify({}) })).status, 404);
+  assert.equal((await fetch(`${base}/api/court/tally`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token }, body: JSON.stringify({ caseId: 'HAG-014' }) })).status, 404);
 });
 
 test('COURT: completing the ratings reveals the mapping and the tally', async () => {
@@ -137,7 +139,7 @@ test('COURT: completing the ratings reveals the mapping and the tally', async ()
   ];
   for (let i = 0; i < remaining.length; i++) {
     const r = await (await fetch(`${base}/api/court/rate`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
       body: JSON.stringify({ caseId: 'CRT-TEST', ...remaining[i] }),
     })).json();
     assert.equal(r.submitted, 5 + i);
@@ -155,24 +157,36 @@ test('COURT: completing the ratings reveals the mapping and the tally', async ()
 
 test('CORRECTION: claim status persists across reads and is audited', async () => {
   const r = await fetch(`${base}/api/correction/claim`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'COR-003', id: 'C1', status: 'Corrected', actor: 'Host', actorKind: 'human' }),
   });
   assert.equal(r.status, 200);
   const c = await (await fetch(`${base}/api/cases/COR-003`)).json();
   assert.equal(c.claims.find((x) => x.id === 'C1').status, 'Corrected');
   assert.ok(c.audit.some((a) => a.event === 'claim-status' && a.claim === 'C1' && a.status === 'Corrected'));
-  // Agent may not change a claim status.
-  const agent = await fetch(`${base}/api/correction/claim`, {
+  // P0 (2026-11-07): the actor comes from the session, never the body.
+  // No token: 401, and the claim is untouched.
+  const noToken = await fetch(`${base}/api/correction/claim`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ caseId: 'COR-003', id: 'C2', status: 'Verified' }),
+  });
+  assert.equal(noToken.status, 401);
+  let after = await (await fetch(`${base}/api/cases/COR-003`)).json();
+  assert.equal(after.claims.find((x) => x.id === 'C2').status, 'Unresolved');
+  // A body that claims actorKind 'agent' is ignored: the session actor
+  // is human, so the change succeeds and records the session actor.
+  const agentBody = await fetch(`${base}/api/correction/claim`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'COR-003', id: 'C2', status: 'Verified', actor: 'Verification Agent', actorKind: 'agent' }),
   });
-  assert.equal(agent.status, 400);
+  assert.equal(agentBody.status, 200);
+  after = await (await fetch(`${base}/api/cases/COR-003`)).json();
+  assert.equal(after.claims.find((x) => x.id === 'C2').status, 'Verified');
 });
 
 test('CORRECTION: guest challenge with evidence persists on the claim', async () => {
   const r = await fetch(`${base}/api/correction/claim`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify({ caseId: 'COR-003', id: 'C2', status: 'Disputed', actor: 'Dr Amara Osei (guest)', actorKind: 'human', challenge: { text: 'Paper says 38%', evidence: 'E2' } }),
   });
   assert.equal(r.status, 200);
@@ -181,4 +195,8 @@ test('CORRECTION: guest challenge with evidence persists on the claim', async ()
   assert.equal(cl.status, 'Disputed');
   assert.equal(cl.guestChallenge.text, 'Paper says 38%');
   assert.equal(cl.guestChallenge.evidence, 'E2');
+  // Integration (2026-11-07): the challenge is submitted AS the episode
+  // guest — its attribution is the guest participant on the case, not
+  // the session actor operating the UI.
+  assert.equal(cl.guestChallenge.by, 'Dr Amara Osei (guest)');
 });

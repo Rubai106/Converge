@@ -40,10 +40,10 @@ function fnBody(name) {
 
 // ---------- Cosmetic: signed money deltas never double-sign ----------
 const signedMoney = new Function(
-  `${extract(/const signedMoney = \(n\) => [^;]+;/, 'signedMoney')}\nreturn signedMoney;`,
+  `${extract(/const signedMoney = \(n\) => [^\n]+/, 'signedMoney')}\nreturn signedMoney;`,
 )();
 const signedPct = new Function(
-  `${extract(/const signedPct = \(n\) => [^;]+;/, 'signedPct')}\nreturn signedPct;`,
+  `${extract(/const signedPct = \(n\) => [^\n]+/, 'signedPct')}\nreturn signedPct;`,
 )();
 
 test('fixround: signedMoney prints a saving with one leading minus, a cost with one leading plus', () => {
@@ -61,7 +61,7 @@ test('fixround: signedPct prints a saving percent with one leading minus', () =>
 });
 
 const strategyImpactLine = new Function(
-  `${extract(/const money = \(n\) => [^;]+;/, 'money')}\n${extract(/const signedMoney = \(n\) => [^;]+;/, 'signedMoney')}\n${extract(/const pct = \(n\) => [^;]+;/, 'pct')}\n${extract(/function strategyImpactLine\(c, s\) \{[\s\S]*?\n\}/, 'strategyImpactLine')}\nreturn strategyImpactLine;`,
+  `${extract(/const money = \(n\) => [^\n]+/, 'money')}\n${extract(/const signedMoney = \(n\) => [^\n]+/, 'signedMoney')}\n${extract(/const pct = \(n\) => [^\n]+/, 'pct')}\n${extract(/function strategyImpactLine\(c, s\) \{[\s\S]*?\n\}/, 'strategyImpactLine')}\nreturn strategyImpactLine;`,
 )();
 function impactCase() {
   return {
@@ -164,18 +164,20 @@ async function waitForServer() {
   }
   throw new Error('server did not start');
 }
+let token; // P0 (2026-11-07): every POST needs a session token.
 async function req(path, opts = {}) {
   const r = await fetch(`${base}${path}`, opts);
   const body = await r.json().catch(() => ({}));
   return { status: r.status, body };
 }
 async function post(path, body) {
-  return req(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  return req(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token }, body: JSON.stringify(body) });
 }
 
 test.before(async () => {
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
 });
 test.after(() => {
   child?.kill();

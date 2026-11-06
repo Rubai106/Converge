@@ -47,8 +47,8 @@ const consts = [
 
 const { courtNextStep, correctionNextStep, caseNextStep, casePrimaryAction } = new Function(
   `${consts}\nconst claimLocal = {};\n`
-  + `${extract(/const STRATEGY_TERMS = \{[\s\S]*?\n\};/, 'STRATEGY_TERMS')}\n`
-  + `${extract(/function termsForStrategy\([\s\S]*?\n\}/, 'termsForStrategy')}\n`
+  // P0 (2026-11-07): the hardcoded STRATEGY_TERMS table is gone —
+  // haggleNextStep never used terms anyway, so no terms extraction.
   + `${extract(/function recommendedStrategy\([\s\S]*?\n\}/, 'recommendedStrategy')}\n`
   + `${extract(/function haggleNextStep\([\s\S]*?\n\}/, 'haggleNextStep')}\n`
   + `${extract(/const COURT_DEMO = \{[\s\S]*?\n\};/, 'COURT_DEMO')}\n`
@@ -188,5 +188,5 @@ test('css: the stepper scrolls instead of colliding at phone sizes', () => {
 
 test('css: the dashboard attention cue uses the existing amber tokens', () => {
   assert.ok(css.includes('.kpi-attention{background:var(--amber-bg)'), 'the KPI cue must use the amber background');
-  assert.ok(css.includes('.decision-attention{border-left:3px solid #C98A1B'), 'the row cue must use the amber edge');
+  assert.ok(css.includes('.decision-attention{border-left:3px solid var(--amber-dot)'), 'the row cue must use the amber edge');
 });

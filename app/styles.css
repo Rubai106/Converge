@@ -1,14 +1,30 @@
-/* CONVERGE — Direction B, premium operations workspace (elevated).
+/* CONVERGE — dark charcoal operations workspace (approved redesign, 2026-11-07).
+   Replaces the Direction B light theme; the STRUCTURE is unchanged
+   (232px sidebar, KPI strip, case workspace grid, stepper, tabs,
+   panels, tables) — this is a reskin, not a layout rebuild.
    System: Inter 500/600/700, IBM Plex Mono tabular numerals for ALL money,
-   percentages and IDs. Background #F4F6F8, panels #FFFFFF, 1px #D9DEE3,
-   radius 4px. No gradients, no glassmorphism, no card grids, no 3D. */
+   percentages and IDs. Foundation #16191D charcoal, panels #1F2329,
+   1px #343A42, radius 4px. Accents: cyan #22D3EE (actions, links, live),
+   lime #A3E635 (positives, approvals). No gradients, no glassmorphism,
+   no card grids, no 3D. (The table/tab/stepper scroll shadows use
+   linear-gradient only as a scroll cue over the panel colour — the same
+   functional technique as before, recolored for dark.)
+   Contrast: every text/background pair below is WCAG AA (>= 4.5:1),
+   computed in Node — see tests/dark-redesign.test.js. */
 :root{
-  --bg:#F4F6F8; --panel:#FFFFFF; --line:#D9DEE3; --line-soft:#EDF0F3;
-  --ink:#0F1B2D; --soft:#5A6B7F; --faint:#5A6B7F; /* --faint was #7C8B9C (3.48:1 on white, WCAG fail) — darkened to match --soft, 5.46:1 (QA 2026-11-06) */
-  --teal:#0E7C6B; --teal-dark:#0A5E51; --teal-bg:#EAF4F1;
-  --red:#B3261E; --red-bg:#FCECEA;
-  --amber:#8A6D00; --amber-bg:#FFF3CD;
-  --brass:#B9975B;
+  color-scheme:dark;
+  --bg:#16191D; --panel:#1F2329; --panel-2:#262B32; --input-bg:#171B20;
+  --line:#343A42; --line-soft:#2A2F36;
+  --ink:#E8ECEF; --soft:#A8B0B8; --faint:#8B949E;
+  --cyan:#22D3EE; --cyan-dark:#0E7490; --cyan-text:#67E8F9; --cyan-bg:#0E2830; --cyan-border:#164E63;
+  --lime:#A3E635; --lime-text:#D9F99D; --lime-bg:#1E2A12; --lime-border:#3F6212;
+  --red:#F87171; --red-text:#FCA5A5; --red-bg:#3B1D1D;
+  --amber:#FBBF24; --amber-text:#FCD34D; --amber-bg:#33270F; --amber-border:#5A4313; --amber-dot:#F59E0B;
+  --blue-text:#93C5FD; --blue-bg:#1E2A3A;
+  --grey-bg:#2A2F36;
+  --heat-1:#14261F; --heat-2:#173528; --heat-3:#1B4534; --heat-4:#1F5A40; --heat-5:#1B6B47;
+  --flash-bg:#3A2E0B; --warn-bg:#241D0B; --warn-border:#4A3D1A;
+  --btn-ink:#06202A;
   --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   --sans:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
 }
@@ -18,32 +34,48 @@ html{font-size:13px}
 body{margin:0;background:var(--bg);color:var(--ink);font:400 1rem/1.5 var(--sans)}
 h1,h2,h3{font-weight:600;margin:0}
 p{margin:0}
-a{color:var(--teal)}
+a{color:var(--cyan)}
 button{font:inherit;cursor:pointer}
-input,select,textarea{font:inherit;color:var(--ink)}
-:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--input-bg);border:1px solid var(--line);border-radius:4px}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
 .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .num,.money,.pct,td.num,th.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .muted{color:var(--soft)}
 .small{font-size:12px}
+/* Spacing utilities (2026-11-07): the server's Content-Security-Policy
+   is style-src 'self', so templates must not carry inline style=""
+   attributes. Static spacing uses these classes; dynamic values
+   (bullet widths) are set from JS via the CSSOM, which CSP allows. */
+.mt-6{margin-top:6px}
+.mt-8{margin-top:8px}
+.mt-10{margin-top:10px}
+.mt-12{margin-top:12px}
+.mb-8{margin-bottom:8px}
+.mb-10{margin-bottom:10px}
+.my-6{margin:6px 0 0}
+.my-6-10{margin:6px 0 10px}
+.text-red{color:var(--red)}
+.field-full{flex:1 1 100%}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;width:100%}
 
 /* ---------- layout ---------- */
 .app{display:flex;min-height:100vh}
 .sidebar{width:232px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--line);
   padding:18px 12px;display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
 .wordmark{font-size:17px;font-weight:700;letter-spacing:.02em;padding:0 10px 4px}
-.wordmark-diamond{color:var(--brass);font-size:12px;margin-left:5px;vertical-align:2px}
+.wordmark-diamond{color:var(--lime);font-size:12px;margin-left:5px;vertical-align:2px}
 .sidebar nav{margin-top:16px;display:flex;flex-direction:column;gap:1px}
 .nav-item{display:flex;justify-content:space-between;align-items:center;width:100%;
   padding:9px 10px;border:0;border-radius:4px;background:transparent;color:var(--soft);
   font-size:13px;font-weight:500;text-align:left}
-.nav-item:hover{background:#F0F3F5;color:var(--ink)}
-.nav-item.is-active{background:var(--teal-bg);color:var(--ink);font-weight:600}
-.nav-badge{background:#E8EDF1;border-radius:10px;padding:0 7px;font-size:11px;font-family:var(--mono)}
+.nav-item:hover{background:var(--panel-2);color:var(--ink)}
+.nav-item.is-active{background:var(--cyan-bg);color:var(--ink);font-weight:600}
+.nav-badge{background:var(--grey-bg);color:var(--soft);border-radius:10px;padding:0 7px;font-size:11px;font-family:var(--mono)}
 .sidebar-foot{margin-top:auto;padding-top:16px}
 .switch-state{font-size:12px;color:var(--soft);display:flex;gap:7px;align-items:flex-start}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;margin-top:4px}
-.dot-amber{background:#C98A1B}.dot-teal{background:var(--teal)}.dot-red{background:var(--red)}
+.dot-amber{background:var(--amber-dot)}.dot-teal{background:var(--cyan)}.dot-red{background:var(--red)}
 .sidebar-note{font-size:11px;color:var(--faint);margin-top:10px;line-height:1.45}
 
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
@@ -52,11 +84,12 @@ input,select,textarea{font:inherit;color:var(--ink)}
 .breadcrumb{font-size:16px;font-weight:600}
 .breadcrumb .crumb-sep{color:var(--faint);font-weight:400;margin:0 6px}
 .breadcrumb .crumb-soft{color:var(--soft);font-weight:500}
+.breadcrumb a{color:var(--soft);text-decoration:none}
+.breadcrumb a:hover{color:var(--cyan);text-decoration:underline}
 .topbar-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.search-wrap input{padding:8px 10px;border:1px solid var(--line);border-radius:4px;width:260px;background:var(--panel)}
-.search-wrap input::placeholder{color:var(--faint)}
-.switch-pill{font-size:11px;font-weight:600;letter-spacing:.04em;color:#6E5700; /* was var(--amber) #8A6D00 on #FFF3CD = 4.44:1 (AA fail); #6E5700 = 6.26:1 (QA 2026-11-06 re-run, M5) */
-  background:var(--amber-bg);border:1px solid #E8D48A;border-radius:10px;padding:4px 9px;white-space:nowrap}
+.search-wrap input{padding:8px 10px;width:260px;background:var(--panel)}
+.switch-pill{font-size:11px;font-weight:600;letter-spacing:.04em;color:var(--amber-text);
+  background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:10px;padding:4px 9px;white-space:nowrap}
 .user-chip{font-size:12px;font-weight:600;color:var(--soft);border:1px solid var(--line);
   background:var(--panel);border-radius:10px;padding:4px 9px;white-space:nowrap}
 .view{padding:16px 20px 24px;flex:1}
@@ -74,10 +107,11 @@ input,select,textarea{font:inherit;color:var(--ink)}
 .table-wrap{overflow-x:auto;margin:0 -16px;padding:0 16px;
   /* H4/L13/L15: scroll shadow — a right-edge fade appears only while
      there is more table to the right (background-attachment: local vs
-     scroll). No fade when the table fits, so the cue never lies. */
-  background-image:linear-gradient(to right,#fff,#fff),linear-gradient(to right,#fff,#fff),
-    linear-gradient(to right,rgba(15,27,45,.16),rgba(15,27,45,0)),
-    linear-gradient(to left,rgba(15,27,45,.16),rgba(15,27,45,0));
+     scroll). No fade when the table fits, so the cue never lies.
+     Cover gradients match the panel colour the table sits on. */
+  background-image:linear-gradient(to right,#1F2329,#1F2329),linear-gradient(to right,#1F2329,#1F2329),
+    linear-gradient(to right,rgba(0,0,0,.55),rgba(0,0,0,0)),
+    linear-gradient(to left,rgba(0,0,0,.55),rgba(0,0,0,0));
   background-position:left center,right center,left center,right center;
   background-repeat:no-repeat;
   background-size:22px 100%,22px 100%,14px 100%,14px 100%;
@@ -93,32 +127,39 @@ th:last-child,td:last-child{padding-right:0}
 .table-wrap th:first-child,.table-wrap td:first-child{position:sticky;left:0;background:var(--panel);z-index:1}
 .table-wrap thead th:first-child{z-index:2}
 tbody tr.clickable{cursor:pointer}
-tbody tr.clickable:hover td{background:#F7F9FA}
-tbody tr.sel td{background:var(--teal-bg)}
-tbody tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--teal)}
+tbody tr.clickable:hover td{background:var(--panel-2)}
+tbody tr.sel td{background:var(--cyan-bg)}
+tbody tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--cyan)}
 /* L11: the selected strategy row's text sat flush against the left edge
    (first-column padding is 0 by design); restore its padding. */
 tbody tr.sel td:first-child{padding-left:8px}
-.switch-note{margin:8px 20px 0;padding:8px 10px;background:var(--amber-bg);color:#6E5700;
+.switch-note{margin:8px 20px 0;padding:8px 10px;background:var(--amber-bg);color:var(--amber-text);
   font-size:12px;border-radius:4px}
-.btn{background:var(--teal);color:#fff;border:0;border-radius:4px;padding:10px 16px;font-weight:600}
-.btn:hover{background:var(--teal-dark)}
-.btn:disabled{background:#8CA39E;cursor:not-allowed}
-.btn-danger{background:var(--red)}
-.btn-danger:hover{background:#8F1D16}
-.ghost-btn{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:7px 12px;font-weight:500}
+.btn{background:var(--cyan);color:var(--btn-ink);border:0;border-radius:4px;padding:10px 16px;font-weight:600}
+.btn:hover{background:var(--cyan-text)}
+.btn:disabled{background:#3A4048;color:var(--faint);cursor:not-allowed}
+.btn-danger{background:#B91C1C;color:#fff}
+.btn-danger:hover{background:#991B1B}
+.ghost-btn{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:7px 12px;font-weight:500;color:var(--ink)}
 .ghost-btn:hover{border-color:var(--soft)}
 .btn-sm{padding:6px 10px;font-size:12px}
 .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}
-.pill-amber{background:var(--amber-bg);color:#6E5700} /* --amber #8A6D00 on #FFF3CD is 4.44:1 (AA fail); #6E5700 is ~5.2:1 (QA 2026-11-06) */
-.pill-teal{background:var(--teal-bg);color:var(--teal-dark)}
-.pill-blue{background:#DCE8F5;color:#1D4E89} /* COMPLETED only — distinct from APPROVED teal (M20) */
-.pill-red{background:var(--red-bg);color:var(--red)}
-.pill-grey{background:#E8EDF1;color:var(--soft)}
-.tag-ev{font-family:var(--mono);font-size:11px;color:var(--teal-dark);background:var(--teal-bg);
+.pill-amber{background:var(--amber-bg);color:var(--amber-text)}
+.pill-teal{background:var(--cyan-bg);color:var(--cyan-text)}
+.pill-blue{background:var(--blue-bg);color:var(--blue-text)} /* COMPLETED only — distinct from APPROVED cyan (M20) */
+.pill-red{background:var(--red-bg);color:var(--red-text)}
+.pill-grey{background:var(--grey-bg);color:var(--soft)}
+.tag-ev{font-family:var(--mono);font-size:11px;color:var(--cyan-text);background:var(--cyan-bg);
   border-radius:3px;padding:1px 5px;white-space:nowrap}
+/* M12: a citation is a real button — keyboard-operable, and it scrolls
+   to + highlights the evidence row it cites. */
+.tag-ev-link{border:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.tag-ev-link:hover{color:var(--cyan)}
+/* The agent tag is used in two places: room message heads and the
+   participants panel. Both are the same cyan role label. */
+.agent-tag{color:var(--cyan-text);font-weight:700;letter-spacing:.04em}
 .flash{animation:flash .8s ease-out}
-@keyframes flash{0%{background:#FDF6D8}100%{background:transparent}}
+@keyframes flash{0%{background:var(--flash-bg)}100%{background:transparent}}
 @media (prefers-reduced-motion:reduce){.flash{animation:none}*{transition:none!important}}
 
 /* ---------- dashboard ---------- */
@@ -130,9 +171,9 @@ tbody tr.sel td:first-child{padding-left:8px}
 /* Dashboard attention cue (2026-11-06): when something awaits a human
    decision, the KPI and its rows carry a soft amber tint so the eye
    goes straight to what needs deciding. Neutral when nothing awaits. */
-.kpi-attention{background:var(--amber-bg);border-color:#E8D48A}
-.kpi-attention b{color:#6E5700}
-.decision-attention{border-left:3px solid #C98A1B;padding-left:10px}
+.kpi-attention{background:var(--amber-bg);border-color:var(--amber-border)}
+.kpi-attention b{color:var(--amber-text)}
+.decision-attention{border-left:3px solid var(--amber-dot);padding-left:10px}
 .dash-lower{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
 .decision-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
   padding:9px 0;border-bottom:1px solid var(--line-soft)}
@@ -148,18 +189,31 @@ tbody tr.sel td:first-child{padding-left:8px}
 .case-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:12px}
 .case-head h1{font-size:18px}
 .case-head .case-meta{color:var(--soft);font-size:12px;margin-top:3px}
-.stepper{display:flex;gap:0;margin:0 0 12px;list-style:none;padding:0}
+.stepper{overflow-x:auto;display:flex;gap:0;margin:0 0 12px;list-style:none;padding:0;scrollbar-width:none;
+  /* M16: the same scroll-shadow cue as .tabs — the current step can sit
+     off-screen on a phone, and nothing used to signal scrollability. */
+  background-image:linear-gradient(to right,#16191D,#16191D),linear-gradient(to right,#16191D,#16191D),
+    linear-gradient(to right,rgba(0,0,0,.55),rgba(0,0,0,0)),
+    linear-gradient(to left,rgba(0,0,0,.55),rgba(0,0,0,0));
+  background-position:left center,right center,left center,right center;
+  background-repeat:no-repeat;
+  background-size:22px 100%,22px 100%,12px 100%,12px 100%;
+  background-attachment:local,local,scroll,scroll}
+.stepper::-webkit-scrollbar{display:none}
 .stepper li{flex:1;min-width:0;text-align:center;font-size:11px;font-weight:500;padding:7px 2px;
-  border-bottom:2px solid var(--line);color:var(--soft)}
-.stepper li.done{border-color:var(--teal);color:var(--teal-dark)}
+  border-bottom:2px solid var(--line);color:var(--soft);white-space:nowrap}
+.stepper li.done{border-color:var(--cyan);color:var(--cyan-text)}
 .stepper li.current{border-color:var(--amber);color:var(--amber);font-weight:700}
 .stepper li.blocked{border-color:var(--red);color:var(--red);font-weight:700}
+/* M9: a terminal case shows its state beside the stepper instead of
+   marking a step current — the stepper keeps the last real step. */
+.stepper-state{display:flex;align-items:center;gap:8px;margin:0 0 10px;font-size:12px;color:var(--soft)}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:12px;overflow-x:auto;
   /* L11: same scroll-shadow cue as .table-wrap, for the tab row.
      Cover gradients match the page background the tabs sit on. */
-  background-image:linear-gradient(to right,#F4F6F8,#F4F6F8),linear-gradient(to right,#F4F6F8,#F4F6F8),
-    linear-gradient(to right,rgba(15,27,45,.16),rgba(15,27,45,0)),
-    linear-gradient(to left,rgba(15,27,45,.16),rgba(15,27,45,0));
+  background-image:linear-gradient(to right,#16191D,#16191D),linear-gradient(to right,#16191D,#16191D),
+    linear-gradient(to right,rgba(0,0,0,.55),rgba(0,0,0,0)),
+    linear-gradient(to left,rgba(0,0,0,.55),rgba(0,0,0,0));
   background-position:left center,right center,left center,right center;
   background-repeat:no-repeat;
   background-size:22px 100%,22px 100%,12px 100%,12px 100%;
@@ -167,7 +221,7 @@ tbody tr.sel td:first-child{padding-left:8px}
 .tab{border:0;background:transparent;padding:9px 13px;font-weight:600;color:var(--soft);
   border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
 .tab:hover{color:var(--ink)}
-.tab.is-active{color:var(--ink);border-bottom-color:var(--teal)}
+.tab.is-active{color:var(--ink);border-bottom-color:var(--cyan)}
 .case-grid{display:grid;grid-template-columns:300px minmax(0,1fr) 280px;gap:12px;align-items:start}
 .case-grid > *,.col-stack,.kpis > *,.dash-lower > *{min-width:0}
 .case-grid .panel + .panel{margin-top:0}
@@ -180,7 +234,7 @@ tbody tr.sel td:first-child{padding-left:8px}
 .kv dt{color:var(--soft)}
 .kv dd{margin:0;text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
 .bullet-wrap{margin:10px 0 4px}
-.bullet{height:10px;background:#E8EDF1;border-radius:2px;position:relative}
+.bullet{height:10px;background:var(--grey-bg);border-radius:2px;position:relative}
 .bullet .bullet-bar{position:absolute;left:0;top:0;bottom:0;background:var(--red);border-radius:2px;max-width:100%}
 .bullet .bullet-target{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink)}
 .bullet .bullet-old{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--soft)}
@@ -191,27 +245,27 @@ tbody tr.sel td:first-child{padding-left:8px}
 .bullet-legend{display:flex;gap:14px;font-size:11px;color:var(--soft);margin-top:4px}
 .bullet-legend .legend-old{color:var(--soft);font-weight:700}
 .bullet-legend .legend-target{color:var(--ink);font-weight:700}
-.mandate-box{border:1px solid #E3D3A8;background:#FDF8E7;border-radius:4px;padding:10px 12px;font-size:12px}
+.mandate-box{border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:4px;padding:10px 12px;font-size:12px}
 .mandate-box b{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .mandate-box .mandate-title{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
   color:var(--amber);font-weight:700;margin-bottom:4px}
 /* Next step panel (2026-11-06): the one action to take, calm and
-   inviting — a soft teal tint from the existing palette, no new colour. */
-.next-step-panel{background:var(--teal-bg);border-color:#C9E2DB}
-.next-step-panel h2{color:var(--teal-dark)}
+   inviting — a soft cyan tint from the new palette. */
+.next-step-panel{background:var(--cyan-bg);border-color:var(--cyan-border)}
+.next-step-panel h2{color:var(--cyan-text)}
 /* Key figures — the three numbers that matter, a touch larger. */
 .key-figures dd{font-size:15px;font-weight:600}
 /* Warning box (2026-11-06): plausibility warnings in the wizard.
    Same amber family as the mandate box. */
-.warn-box{border:1px solid #E3D3A8;background:#FDF8E7;border-radius:4px;padding:12px 14px;margin-top:14px}
+.warn-box{border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:4px;padding:12px 14px;margin-top:14px}
 .warn-box h3{font-size:12px;color:var(--amber);margin-bottom:6px}
 .warn-list{margin:6px 0 10px;padding-left:18px;font-size:12px}
 .warn-list li{margin-bottom:4px}
 .warn-ack{display:flex;gap:8px;align-items:flex-start;font-size:12px;font-weight:600;cursor:pointer}
 .warn-ack input{margin-top:2px}
 /* Text link styled as a link (not a button). */
-.link-btn{border:0;background:none;padding:0;color:var(--teal);text-decoration:underline;font-size:inherit}
-.link-btn:hover{color:var(--teal-dark)}
+.link-btn{border:0;background:none;padding:0;color:var(--cyan);text-decoration:underline;font-size:inherit}
+.link-btn:hover{color:var(--cyan-text)}
 .timeline{list-style:none;margin:0;padding:0}
 .timeline li{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:12px}
 .timeline li:last-child{border-bottom:0}
@@ -219,58 +273,57 @@ tbody tr.sel td:first-child{padding-left:8px}
 .timeline .tl-who{color:var(--soft)}
 .approve-bar{display:flex;flex-direction:column;gap:8px}
 .approve-bar .btn{width:100%}
-.approve-stamp{border:1px solid var(--brass);border-radius:4px;padding:10px 12px;font-size:12px;
-  color:#6B5A2E;background:#FBF7EC}
+.approve-stamp{border:1px solid var(--lime-border);border-radius:4px;padding:10px 12px;font-size:12px;
+  color:var(--lime-text);background:var(--lime-bg)}
 .approve-stamp b{color:var(--ink)}
-.stamp-word{color:#6B5A2E;font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:11px} /* brass #B9975B on #FBF7EC was 2.57:1 — the approval stamp is the least-readable text in the app (QA 2026-11-06); #6B5A2E is 6.27:1 */
+.stamp-word{color:var(--lime);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:11px}
 .evidence-ref{font-size:12px;color:var(--soft);line-height:1.7}
 .conflict-cell{box-shadow:inset 2px 0 0 var(--red)}
 .delta-tag{font-size:10px;font-weight:700;color:var(--red);letter-spacing:.04em}
-.heat-1{background:#F2F7F5}.heat-2{background:#E2EEEA}.heat-3{background:#CFE3DC}
-.heat-4{background:#B7D6CB}.heat-5{background:#9CC8B9}
+.heat-1{background:var(--heat-1)}.heat-2{background:var(--heat-2)}.heat-3{background:var(--heat-3)}
+.heat-4{background:var(--heat-4)}.heat-5{background:var(--heat-5)}
 tr.disagree td{background:var(--amber-bg)}
-tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
+tr.disagree td:first-child{box-shadow:inset 2px 0 0 var(--amber-dot)}
 .disagree-tag{font-size:10px;font-weight:700;color:var(--amber);letter-spacing:.04em}
 .sample-switch{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
-.sample-switch .ghost-btn.is-active{border-color:var(--teal);color:var(--teal-dark);font-weight:600;background:var(--teal-bg)}
+.sample-switch .ghost-btn.is-active{border-color:var(--cyan);color:var(--cyan-text);font-weight:600;background:var(--cyan-bg)}
 .audit-list{list-style:none;margin:0;padding:0}
 .audit-list li{padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:12px}
 .audit-list li:last-child{border-bottom:0}
 .audit-list .au-time{font-family:var(--mono);font-size:11px;color:var(--faint);margin-right:6px}
-.decision-sentence{border-left:3px solid var(--brass);background:#FBF7EC;padding:10px 12px;
+.decision-sentence{border-left:3px solid var(--lime);background:var(--lime-bg);padding:10px 12px;
   font-size:13px;border-radius:0 4px 4px 0;margin-bottom:10px}
 .challenge-form{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
-.challenge-form input{flex:1;min-width:180px;padding:7px 9px;border:1px solid var(--line);border-radius:4px}
+.challenge-form input{flex:1;min-width:180px;padding:7px 9px}
 .challenge-note{font-size:12px;color:var(--amber);margin-top:4px}
 .filter-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
-.filter-row .ghost-btn.is-active{border-color:var(--teal);color:var(--teal-dark);font-weight:600;background:var(--teal-bg)}
+.filter-row .ghost-btn.is-active{border-color:var(--cyan);color:var(--cyan-text);font-weight:600;background:var(--cyan-bg)}
 .inline-error{color:var(--red);font-size:12px;margin-top:8px}
 .move-to{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.move-to select{padding:7px 9px;border:1px solid var(--line);border-radius:4px;background:var(--panel)}
+.move-to select{padding:7px 9px;background:var(--panel)}
 
 /* ---------- drawer / modal ---------- */
-.drawer-backdrop,.modal-backdrop{position:fixed;inset:0;background:rgba(15,27,45,.35);z-index:40}
+.drawer-backdrop,.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40}
 .drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);background:var(--panel);
   border-left:1px solid var(--line);z-index:50;display:flex;flex-direction:column;
-  box-shadow:-4px 0 16px rgba(15,27,45,.12)}
+  box-shadow:-4px 0 16px rgba(0,0,0,.5)}
 .drawer-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:16px 16px 10px}
 .drawer-head h2{font-size:15px}
 .drawer-sub{color:var(--soft);font-size:12px;margin-top:2px}
-.sim-label{margin:0 16px 10px;padding:7px 10px;background:var(--amber-bg);color:var(--amber);
+.sim-label{margin:0 16px 10px;padding:7px 10px;background:var(--amber-bg);color:var(--amber-text);
   font-size:11px;font-weight:700;letter-spacing:.03em;border-radius:4px}
-.sim-label.live-label{background:#e6f4f1;color:#0A5C50} /* was #0e7c6b = 4.52:1 (AA-barely); #0A5C50 = 6.98:1 (night hardening 2026-11-06) */
-.sim-label.warn-label{background:var(--amber-bg);color:#6E5700}
+.sim-label.live-label{background:var(--cyan-bg);color:var(--cyan-text)}
+.sim-label.warn-label{background:var(--amber-bg);color:var(--amber-text)}
 .room-log{flex:1;overflow-y:auto;padding:4px 16px 12px}
 .room-msg{padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:13px}
 .room-msg .rm-head{font-size:11px;color:var(--soft);margin-bottom:2px}
 .room-msg .rm-head b{color:var(--ink)}
-.room-msg .rm-head .agent-tag{color:var(--teal-dark);font-weight:700;letter-spacing:.04em}
 .room-form{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
-.room-form input{flex:1;padding:9px 10px;border:1px solid var(--line);border-radius:4px;min-width:0}
+.room-form input{flex:1;padding:9px 10px;min-width:0}
 .modal-backdrop{display:flex;align-items:center;justify-content:center;padding:16px}
 .modal{background:var(--panel);border:1px solid var(--line);border-radius:4px;max-width:480px;width:100%;padding:20px}
 .modal h2{font-size:16px;margin-bottom:10px}
-.modal-terms{font-family:var(--mono);font-size:14px;background:var(--teal-bg);
+.modal-terms{font-family:var(--mono);font-size:14px;background:var(--cyan-bg);
   border-radius:4px;padding:12px;margin:0 0 10px}
 .modal-impact{font-size:13px;margin-top:8px}
 .modal-recommendation{font-size:12px;color:var(--soft);margin-top:6px}
@@ -318,12 +371,12 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
   .btn,.ghost-btn{min-height:44px}
   .move-to select{min-height:44px}
   .search-wrap input{min-height:44px}
-  /* L17 (revised 2026-11-06): the 7 step labels never fit a 390px row —
+  /* L17 (revised 2026-11-06): the step labels never fit a 390px row —
      shrinking the type only made them collide ("InvestigatingDiscussion").
-     At phone sizes the stepper scrolls horizontally (same scroll-fade cue
-     as the tabs) and each label keeps its natural width. */
-  .stepper{overflow-x:auto;scrollbar-width:none}
-  .stepper::-webkit-scrollbar{display:none}
+     At phone sizes the stepper scrolls horizontally and each label keeps
+     its natural width; the scroll-shadow + auto-scroll (M16) show where
+     the current step is. */
+  .stepper{overflow-x:auto}
   .stepper li{flex:0 0 auto;min-width:76px;font-size:11px;padding:7px 6px;white-space:nowrap}
   .switch-note{margin:8px 14px 0}
   /* Night hardening 2026-11-06: the 140px search truncated its own
@@ -334,12 +387,12 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
 }
 
 /* ---------- QA 2026-11-06: skip link, transcript list, rating form ---------- */
-.skip-link{position:absolute;left:-9999px;top:0;background:var(--ink);color:#fff;padding:10px 16px;z-index:200;border-radius:0 0 4px 0;font-size:14px}
+.skip-link{position:absolute;left:-9999px;top:0;background:var(--cyan);color:var(--btn-ink);padding:10px 16px;z-index:200;border-radius:0 0 4px 0;font-size:14px}
 .skip-link:focus{left:0}
 .transcript-list{margin:0;padding-left:22px}
 .transcript-list li{margin-bottom:10px;line-height:1.5}
 .transcript-list .pill{margin-left:4px}
 .rating-form{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end;margin-top:10px}
 .rating-form label{font-size:13px;color:var(--soft);display:flex;flex-direction:column;gap:4px}
-.rating-form select,.rating-form input{font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 8px;background:#fff}
+.rating-form select,.rating-form input{font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 8px;background:var(--input-bg)}
 .rating-form input[type="number"]{width:64px}

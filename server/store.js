@@ -1,7 +1,7 @@
 // CONVERGE store — JSON file store (SQLite-shaped, no native deps).
 // Cases, evidence, proposals, approvals, messages and audit trail.
 // Demo data is seeded, clearly labelled as demo/fictional.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync, openSync, fsyncSync, closeSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,10 +33,10 @@ export function seedData() {
         },
         switchRoom: '#haggle-dairyco', switchRoomId: null,
         proposals: [
-          { id: 'P1', kind: 'proposal', text: 'Hold $0.16/fl oz for 4 weeks for a 25 L/week volume commitment.', status: 'proposed', by: 'Negotiation Agent' },
-          { id: 'P2', kind: 'counter-offer', text: 'Supplier counters: $0.19/fl oz for 6 weeks, in writing.', status: 'proposed', by: 'DairyCo rep' },
+          { id: 'P1', kind: 'proposal', text: 'Hold $0.16 / fl oz for 4 weeks for a 25 L/week volume commitment.', status: 'proposed', by: 'Negotiation Agent' },
+          { id: 'P2', kind: 'counter-offer', text: 'Supplier counters: $0.18 / fl oz for 6 weeks, in writing.', status: 'proposed', by: 'DairyCo rep' },
         ],
-        pendingApproval: { proposalId: 'P2', terms: '$0.19/fl oz for 6 weeks', requestedBy: 'Negotiation Agent' },
+        pendingApproval: { proposalId: 'P2', terms: '$0.18 / fl oz for 6 weeks', requestedBy: 'Negotiation Agent' },
         approval: null, audit: [], messages: [],
         evidence: [
           { id: 'E1', type: 'invoice', source: 'DairyCo invoice (demo)', status: 'Verified', note: 'Cream $0.16 → $0.24/fl oz.' },
@@ -103,9 +103,71 @@ export function seedData() {
   };
 }
 
+const BACKUP_COUNT = 3;
+const backupFile = (n) => `${file}.bak.${n}`;
+
+// Atomic save (P0, 2026-11-07): the old bare writeFileSync could leave
+// a truncated converge.json if the process died mid-write — and this VM
+// has been replaced seven times. Write the full payload to a temp file,
+// fsync it, then rename over the live file (rename is atomic on the
+// same filesystem), and rotate the last 3 saves as backups.
+export function save(data) {
+  mkdirSync(dir, { recursive: true });
+  const payload = JSON.stringify(data, null, 2);
+  const tmp = `${file}.tmp`;
+  const fd = openSync(tmp, 'w');
+  try {
+    writeFileSync(fd, payload);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, file);
+  rotateBackups();
+  return data;
+}
+
+function rotateBackups() {
+  // Shift .bak.2 -> .bak.3, .bak.1 -> .bak.2, then copy the just-saved
+  // live file to .bak.1. Missing backups are skipped, never fatal.
+  try {
+    for (let n = BACKUP_COUNT - 1; n >= 1; n--) {
+      const from = backupFile(n);
+      if (existsSync(from)) renameSync(from, backupFile(n + 1));
+    }
+    copyFileSync(file, backupFile(1));
+  } catch {
+    // Backups are best-effort: a failed rotation must never fail the save.
+  }
+}
+
+// Read and parse a JSON store file; returns null when the file is
+// missing or unparseable (a truncated write).
+function tryReadJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 export function load() {
-  if (!existsSync(file)) { mkdirSync(dir, { recursive: true }); const d = seedData(); writeFileSync(file, JSON.stringify(d, null, 2)); return d; }
-  const d = JSON.parse(readFileSync(file, 'utf8'));
+  if (!existsSync(file)) { mkdirSync(dir, { recursive: true }); const d = seedData(); save(d); return d; }
+  let d = tryReadJson(file);
+  if (!d) {
+    // The live file is corrupt (a crash mid-write before the atomic
+    // save existed, or a partial write from another process) — fall
+    // back to the newest valid backup instead of losing everything.
+    for (let n = 1; n <= BACKUP_COUNT; n++) {
+      d = tryReadJson(backupFile(n));
+      if (d) break;
+    }
+  }
+  if (!d || !Array.isArray(d.cases)) {
+    const fresh = seedData();
+    save(fresh);
+    return fresh;
+  }
   // Migrate stores seeded before a field existed: backfill missing fields
   // from the current seed, never overwriting data already recorded.
   const seed = seedData();
@@ -128,8 +190,7 @@ export function load() {
       c.pendingApproval = null; changed = true;
     }
   }
-  if (changed) writeFileSync(file, JSON.stringify(d, null, 2));
+  if (changed) save(d);
   return d;
 }
-export function save(data) { mkdirSync(dir, { recursive: true }); writeFileSync(file, JSON.stringify(data, null, 2)); return data; }
 export function getCase(data, id) { return data.cases.find((c) => c.id === id); }

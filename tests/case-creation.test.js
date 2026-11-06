@@ -39,9 +39,10 @@ const validPayload = {
   evidenceSource: 'DairyCo invoice (demo)',
 };
 
+let token; // P0 (2026-11-07): every POST needs a session token.
 async function post(path, body) {
   return fetch(`${base}${path}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify(body),
   });
 }
@@ -57,6 +58,7 @@ async function maxHaggleNumber() {
 test.before(async () => {
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
 });
 
 test.after(() => {
@@ -84,7 +86,8 @@ test('HAGGLE creation: valid payload creates a case with engine analysis + stub 
   assert.equal(c.evidence[0].type, 'source');
   assert.equal(c.evidence[0].status, 'Unverified');
   assert.equal(c.evidence[0].source, 'DairyCo invoice (demo)');
-  assert.ok(c.audit.some((a) => a.event === 'case-created' && a.actor === 'Owner' && a.kind === 'human'));
+  // P0 (2026-11-07): the audit actor is the session actor, never 'Owner'.
+  assert.ok(c.audit.some((a) => a.event === 'case-created' && a.actor === 'Mara · Owner' && a.kind === 'human'));
   // Computed analysis + strategies match the deterministic engine exactly.
   const expectedAnalysis = haggleAnalysis(validPayload);
   assert.equal(c.analysis.newCreamCostPerServing, expectedAnalysis.newCreamCostPerServing);

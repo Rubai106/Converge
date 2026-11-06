@@ -69,9 +69,10 @@ async function waitForServer() {
   throw new Error('server did not start');
 }
 
+let token; // P0 (2026-11-07): every POST needs a session token.
 async function post(path, body) {
   return fetch(`${base}${path}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
     body: JSON.stringify(body),
   });
 }
@@ -91,6 +92,7 @@ test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(seedData()));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
+  token = (await (await fetch(`${base}/api/session`, { method: 'POST' })).json()).token;
   browser = await chromium.launch();
 });
 
