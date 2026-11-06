@@ -40,12 +40,16 @@ export function transitionCase(c, to, actor) {
   const from = c.state;
   c.state = to;
   if (to === 'APPROVED') c.approval = { ...c.pendingApproval, approvedBy: actor.name, approvedAt: new Date().toISOString() };
-  // A pending approval is resolved by the decision: once a case is
-  // APPROVED (or the terms are REJECTED) nothing is pending any more.
-  // Leaving it set made the Decisions view, the case overview and the
-  // Approvals panel all claim a decision was still awaited on a case
-  // that was already decided (QA 2026-11-06).
-  if (to === 'APPROVED' || to === 'REJECTED') c.pendingApproval = null;
+  // A pending approval is resolved by leaving AWAITING_APPROVAL for any
+  // other state: APPROVED/REJECTED decide it, and stepping back to
+  // DISCUSSION reopens the proposal, so nothing is pending any more.
+  // (The server re-sets pendingApproval after the transition when a
+  // proposal is submitted into AWAITING_APPROVAL — server.js — so
+  // clearing here never breaks that path.) Leaving it set made the
+  // Decisions view, the case overview and the Approvals panel all claim
+  // a decision was still awaited on a case that was already decided or
+  // sent back for discussion (QA 2026-11-06, P0 C3).
+  if (to !== 'AWAITING_APPROVAL') c.pendingApproval = null;
   audit(c, actor, `state:${from}->${to}`);
   return c;
 }

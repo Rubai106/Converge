@@ -75,6 +75,65 @@ let searchQuery = '';
 let roomCaseId = null;
 let claimLocal = {}; // caseId -> claimId -> {status, challenge:{text, evidence, by}}
 
+// ---------- guided HAGGLE case creation ----------
+// Step validators + payload builder are pure (no DOM, no fetch) so the
+// static tests can extract and exercise them directly. They mirror the
+// server's rules in server/server.js validateHaggleCreation: finite
+// numbers, qtyPerServing/menuPrice/targetFoodCostPct > 0, the rest >= 0,
+// targetPrice <= maxApprovedPrice, non-empty supplier/ingredient, unit
+// from the supported set. targetFoodCostPct is collected in step 3:
+// the server requires it (> 0) to compute the max sustainable price,
+// and the preview/create calls 400 without it.
+const WIZARD_UNITS = ['fl oz', 'oz', 'lb', 'kg', 'g', 'L', 'ml', 'each', 'serving'];
+const WIZARD_STEPS = ['Supplier & ingredient', 'Prices & quantity', 'Menu & volume', 'Your mandate', 'Review & create'];
+const WIZARD_FIELD_STEP = { supplier: 1, ingredient: 1, recipe: 1, oldPrice: 2, newPrice: 2, unit: 2, qtyPerServing: 2, menuPrice: 3, otherIngredientsCostPerServing: 3, monthlySales: 3, targetFoodCostPct: 3, targetPrice: 4, maxApprovedPrice: 4, evidenceSource: 5 };
+let wizard = null;
+function newWizard() {
+  return { step: 1, values: { supplier: '', ingredient: '', recipe: '', oldPrice: '', newPrice: '', unit: 'fl oz', qtyPerServing: '', menuPrice: '', otherIngredientsCostPerServing: '', monthlySales: '', targetFoodCostPct: '30', targetPrice: '', maxApprovedPrice: '', evidenceSource: '' }, errors: {}, preview: null, previewError: null, previewLoading: false, createError: null, creating: false };
+}
+function validateWizardStep(step, v) {
+  const errors = {};
+  const num = (f, min, exclusiveMin, label) => {
+    const raw = v[f];
+    const n = Number(raw);
+    if (raw === '' || raw === undefined || raw === null || !Number.isFinite(n)) errors[f] = `${label} must be a number.`;
+    else if (exclusiveMin ? !(n > min) : !(n >= min)) errors[f] = `${label} must be ${exclusiveMin ? 'greater than' : 'at least'} ${min}.`;
+  };
+  if (step === 1) {
+    if (!String(v.supplier || '').trim()) errors.supplier = 'Supplier must not be empty.';
+    if (!String(v.ingredient || '').trim()) errors.ingredient = 'Ingredient must not be empty.';
+  } else if (step === 2) {
+    num('oldPrice', 0, false, 'Old price');
+    num('newPrice', 0, false, 'New price');
+    if (!WIZARD_UNITS.includes(v.unit)) errors.unit = `Unit must be one of: ${WIZARD_UNITS.join(', ')}.`;
+    num('qtyPerServing', 0, true, 'Quantity per serving');
+  } else if (step === 3) {
+    num('menuPrice', 0, true, 'Menu price');
+    num('otherIngredientsCostPerServing', 0, false, 'Other ingredient costs per serving');
+    num('monthlySales', 0, false, 'Monthly volume');
+    num('targetFoodCostPct', 0, true, 'Target food cost %');
+  } else if (step === 4) {
+    num('targetPrice', 0, false, 'Target price');
+    num('maxApprovedPrice', 0, false, 'Max approved price');
+    if (!errors.targetPrice && !errors.maxApprovedPrice && Number(v.targetPrice) > Number(v.maxApprovedPrice)) errors.targetPrice = 'Target price must be less than or equal to max approved price.';
+  }
+  return errors;
+}
+function wizardPayload(v) {
+  return {
+    supplier: String(v.supplier || '').trim(),
+    ingredient: String(v.ingredient || '').trim(),
+    recipe: String(v.recipe || '').trim(),
+    oldPrice: Number(v.oldPrice), newPrice: Number(v.newPrice), unit: v.unit,
+    qtyPerServing: Number(v.qtyPerServing),
+    otherIngredientsCostPerServing: Number(v.otherIngredientsCostPerServing),
+    menuPrice: Number(v.menuPrice), monthlySales: Number(v.monthlySales),
+    targetFoodCostPct: Number(v.targetFoodCostPct),
+    targetPrice: Number(v.targetPrice), maxApprovedPrice: Number(v.maxApprovedPrice),
+    evidenceSource: String(v.evidenceSource || '').trim(),
+  };
+}
+
 function counterparty(c) {
   if (c.workflow === 'HAGGLE') return c.input?.supplier || '—';
   if (c.workflow === 'COURT') return 'Family group';
@@ -184,7 +243,7 @@ function render() {
   if (currentCaseId && details[currentCaseId]) { renderCase(); return; }
   if (currentCaseId) { currentCaseId = null; }
   ({ overview: renderDashboard, cases: renderCasesView, workflows: renderWorkflows,
-     evidence: renderEvidenceView, decisions: renderDecisionsView,
+     evidence: renderEvidenceView, decisions: renderDecisionsView, create: renderCreateWizard,
      activity: renderActivityView, settings: renderSettingsView }[view] || renderDashboard)();
 }
 
@@ -241,6 +300,7 @@ function renderDashboard() {
   $('#view').innerHTML = `
     <h1 class="section-title">Overview</h1>
     <p class="section-sub">One shared decision engine across HAGGLE, COURT and CORRECTION. Humans approve; agents propose, calculate and investigate.</p>
+    <p><button class="btn" id="new-case-btn">+ New supplier case</button></p>
     <div class="kpis" role="group" aria-label="Key figures">
       <div class="kpi"><small>Active cases</small><b>${k.active}</b><div class="kpi-note">${cases.length} total cases</div></div>
       <div class="kpi"><small>Awaiting approval</small><b>${k.awaiting}</b><div class="kpi-note">human decision required</div></div>
@@ -275,6 +335,7 @@ function renderDashboard() {
         <p class="small muted" style="margin-top:8px">Derived from case records (proposals, approvals, audit events) — not a live feed.</p>
       </section>
     </div>`;
+  $('#new-case-btn').addEventListener('click', openWizard);
   bindCaseRows($('#view'));
 }
 function activityFeed() {
@@ -296,12 +357,14 @@ function renderCasesView() {
   $('#view').innerHTML = `
     <h1 class="section-title">Active Cases</h1>
     <p class="section-sub">${cases.filter(isActive).length} active of ${cases.length} total. Click a row to open the case workspace.</p>
+    <p><button class="btn" id="new-case-btn">+ New supplier case</button></p>
     <section class="panel"><div class="table-wrap"><table>
       <caption>${searchQuery ? `Filtered by “${esc(searchQuery)}”.` : 'All cases in this workspace.'}</caption>
       <thead><tr><th scope="col">Case</th><th scope="col">Workflow</th><th scope="col">Counterparty</th>
       <th scope="col" class="num">Impact</th><th scope="col">Stage</th><th scope="col">Owner</th><th scope="col" class="num">Updated</th></tr></thead>
       <tbody>${casesTableRows(filteredCases()) || `<tr><td colspan="7" class="empty">No cases match.</td></tr>`}</tbody>
     </table></div></section>`;
+  $('#new-case-btn').addEventListener('click', openWizard);
   bindCaseRows($('#view'));
 }
 function renderWorkflows() {
@@ -384,6 +447,171 @@ function renderSettingsView() {
       </dl>
       <p class="small muted" style="margin-top:10px">Point this app at a real Switch server by setting SWITCH_BASE_URL and a real agent key; the stub is used only while SWITCH_BASE_URL is unset. Keyboard: ⌘K focuses search.</p>
     </section>`;
+}
+
+// ---------- guided HAGGLE case creation wizard ----------
+function openWizard() {
+  wizard = newWizard();
+  setView('create');
+}
+function cancelWizard() { wizard = null; setView('overview'); }
+function wizardFieldError(field) {
+  const msg = wizard.errors[field];
+  return msg ? `<span class="inline-error" role="alert">${esc(msg)}</span>` : '';
+}
+function wizardStepFields() {
+  const v = wizard.values;
+  const num = (id, label, val, extra = '') => `<label>${esc(label)} <input type="number" step="any" min="0" id="wz-${id}" value="${esc(val)}" ${extra}>${wizardFieldError(id)}</label>`;
+  if (wizard.step === 1) return `
+    <label>Supplier <input type="text" id="wz-supplier" value="${esc(v.supplier)}" placeholder="e.g. DairyCo" autocomplete="off">${wizardFieldError('supplier')}</label>
+    <label>Ingredient <input type="text" id="wz-ingredient" value="${esc(v.ingredient)}" placeholder="e.g. heavy cream" autocomplete="off">${wizardFieldError('ingredient')}</label>
+    <label>Recipe (optional) <input type="text" id="wz-recipe" value="${esc(v.recipe)}" placeholder="e.g. Alfredo" autocomplete="off">${wizardFieldError('recipe')}</label>`;
+  if (wizard.step === 2) return `
+    ${num('oldPrice', 'Old price ($)', v.oldPrice)}
+    ${num('newPrice', 'New price ($)', v.newPrice)}
+    <label>Unit <select id="wz-unit">${WIZARD_UNITS.map((u) => `<option value="${esc(u)}" ${v.unit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>${wizardFieldError('unit')}</label>
+    ${num('qtyPerServing', 'Quantity per serving', v.qtyPerServing)}`;
+  if (wizard.step === 3) return `
+    ${num('menuPrice', 'Menu price ($)', v.menuPrice)}
+    ${num('otherIngredientsCostPerServing', 'Other ingredient costs per serving ($)', v.otherIngredientsCostPerServing)}
+    ${num('monthlySales', 'Monthly volume (servings)', v.monthlySales, 'step="1"')}
+    ${num('targetFoodCostPct', 'Target food cost (%)', v.targetFoodCostPct)}`;
+  if (wizard.step === 4) return `
+    ${num('targetPrice', 'Target price ($)', v.targetPrice)}
+    ${num('maxApprovedPrice', 'Max approved price ($)', v.maxApprovedPrice)}
+    <p class="small muted">Walk away above <strong>${v.maxApprovedPrice !== '' && Number.isFinite(Number(v.maxApprovedPrice)) ? money(Number(v.maxApprovedPrice)) : '—'}</strong> — the owner will not pay more than the max approved price.</p>`;
+  return wizardReviewStep();
+}
+function wizardReviewStep() {
+  const v = wizard.values;
+  const a = wizard.preview?.analysis;
+  const strategies = wizard.preview?.strategies || [];
+  let body = '';
+  if (wizard.previewLoading) {
+    body = '<p>Calculating the preview — food cost, margin and strategies…</p>';
+  } else if (wizard.previewError) {
+    // The server names the offending field; point the user at its step.
+    const field = Object.keys(WIZARD_FIELD_STEP).find((f) => new RegExp(`\\b${f}\\b`).test(wizard.previewError));
+    const step = field ? WIZARD_FIELD_STEP[field] : null;
+    body = `<p class="inline-error" role="alert">${esc(wizard.previewError)}</p>
+      ${step ? `<p><button class="ghost-btn btn-sm" type="button" id="wz-fix-step">Go to step ${step} to fix it</button></p>` : ''}`;
+  } else if (a) {
+    body = `
+    <h3>Calculation — deterministic, no LLM maths</h3>
+    <dl class="kv">
+      <dt>Cream / serving</dt><dd>${money(a.oldCreamCostPerServing)} → ${money(a.newCreamCostPerServing)}</dd>
+      <dt>Extra cost</dt><dd>+${money(a.costDiffPerServing)} / serving · ${money(a.monthlyExtraCost)} / month · ${money(a.annualExtraCost)} / year</dd>
+      <dt>Food cost</dt><dd>${pct(a.oldFoodCostPct)} → ${pct(a.newFoodCostPct)} (target ${esc(String(v.targetFoodCostPct))}%)</dd>
+      <dt>Gross margin</dt><dd>${pct(a.oldGrossMarginPct)} → ${pct(a.newGrossMarginPct)}</dd>
+      <dt>Max sustainable price</dt><dd>${money(a.maxSustainableUnitPrice)} / ${esc(v.unit)}</dd>
+    </dl>
+    <h3>Assumptions</h3>
+    <p class="small">${esc(v.qtyPerServing)} ${esc(v.unit)} per serving · other ingredients ${money(Number(v.otherIngredientsCostPerServing))} · menu ${money(Number(v.menuPrice))} · ${esc(v.monthlySales)} servings/month · target ${esc(v.targetPrice)} / max ${money(Number(v.maxApprovedPrice))} — walk away above ${money(Number(v.maxApprovedPrice))}</p>
+    <h3>Strategies</h3>
+    <div class="table-wrap"><table>
+      <caption>Strategies priced by the deterministic engine.</caption>
+      <thead><tr><th scope="col">Option</th><th scope="col" class="num">Price</th><th scope="col" class="num">Food cost</th><th scope="col" class="num">Monthly impact</th></tr></thead>
+      <tbody>${strategies.map((s) => `<tr><td><strong>${esc(s.name)}</strong><br><span class="muted small">${esc(s.detail || '')}</span></td><td class="num">${money(s.unitPrice)}</td><td class="num">${pct(s.foodCostPct)}</td><td class="num">${s.extraVsOldPerMonth >= 0 ? '+' : ''}${money(s.extraVsOldPerMonth)}</td></tr>`).join('')}</tbody>
+    </table></div>`;
+  }
+  return `${body}
+    <label>Evidence source (optional) <input type="text" id="wz-evidenceSource" value="${esc(v.evidenceSource)}" placeholder="Where the price information came from — e.g. DairyCo invoice" autocomplete="off">${wizardFieldError('evidenceSource')}</label>`;
+}
+function renderCreateWizard() {
+  if (!wizard) wizard = newWizard();
+  setBreadcrumb('<span class="crumb-soft">Cases</span><span class="crumb-sep">/</span>New supplier case');
+  const stepper = WIZARD_STEPS.map((s, i) => {
+    const n = i + 1;
+    const cls = n < wizard.step ? 'done' : (n === wizard.step ? 'current' : '');
+    const cur = n === wizard.step ? ' aria-current="step"' : '';
+    return `<li class="${cls}"${cur}>${n}. ${esc(s)}</li>`;
+  }).join('');
+  const isLast = wizard.step === 5;
+  $('#view').innerHTML = `
+    <h1 class="section-title">New supplier case</h1>
+    <p class="section-sub">Guided HAGGLE case — the numbers are checked by the deterministic engine before anything is created. Nothing is saved until you press “Create case”.</p>
+    <ol class="stepper" aria-label="Creation steps">${stepper}</ol>
+    <section class="panel" aria-labelledby="wz-h">
+      <h2 id="wz-h">Step ${wizard.step} of 5 — ${esc(WIZARD_STEPS[wizard.step - 1])}</h2>
+      <form class="rating-form" id="wizard-form" novalidate>
+        ${wizardStepFields()}
+        ${wizard.createError ? `<p class="inline-error" role="alert">${esc(wizard.createError)}</p>` : ''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;width:100%">
+          ${wizard.step > 1 ? '<button class="ghost-btn" type="button" id="wz-back">← Back</button>' : ''}
+          ${isLast
+            ? `<button class="btn" type="submit" id="wz-create" ${wizard.creating || wizard.previewLoading || !wizard.preview ? 'disabled' : ''}>Create case</button>`
+            : '<button class="btn" type="submit" id="wz-next">Continue →</button>'}
+          <button class="ghost-btn" type="button" id="wz-cancel">Cancel</button>
+        </div>
+      </form>
+    </section>`;
+  $('#wz-cancel').addEventListener('click', cancelWizard);
+  const back = $('#wz-back');
+  if (back) back.addEventListener('click', () => { wizard.errors = {}; wizard.createError = null; wizard.step -= 1; renderCreateWizard(); });
+  const fix = $('#wz-fix-step');
+  if (fix) fix.addEventListener('click', () => {
+    const field = Object.keys(WIZARD_FIELD_STEP).find((f) => new RegExp(`\\b${f}\\b`).test(wizard.previewError || ''));
+    if (field) { wizard.previewError = null; wizard.preview = null; wizard.step = WIZARD_FIELD_STEP[field]; renderCreateWizard(); }
+  });
+  $('#wizard-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    readWizardStep();
+    if (wizard.step < 5) {
+      wizard.errors = validateWizardStep(wizard.step, wizard.values);
+      if (Object.keys(wizard.errors).length) {
+        renderCreateWizard();
+        const first = Object.keys(wizard.errors)[0];
+        const el = $(`#wz-${first}`);
+        if (el) el.focus();
+        return;
+      }
+      wizard.errors = {};
+      wizard.step += 1;
+      renderCreateWizard();
+      if (wizard.step === 5) loadWizardPreview();
+      return;
+    }
+    // Step 5: create the case.
+    const w = wizard;
+    wizard.creating = true; wizard.createError = null; renderCreateWizard();
+    try {
+      const created = await api('/api/cases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(wizardPayload(w.values)) });
+      if (wizard !== w) return; // user cancelled while the request was in flight
+      cases.push(created);
+      details[created.id] = created;
+      $('#nav-case-count').textContent = String(cases.filter(isActive).length);
+      wizard = null;
+      openCase(created.id);
+    } catch (err) {
+      if (wizard !== w) return;
+      wizard.creating = false;
+      wizard.createError = err.message;
+      renderCreateWizard();
+    }
+  });
+}
+function readWizardStep() {
+  const ids = { 1: ['supplier', 'ingredient', 'recipe'], 2: ['oldPrice', 'newPrice', 'unit', 'qtyPerServing'], 3: ['menuPrice', 'otherIngredientsCostPerServing', 'monthlySales', 'targetFoodCostPct'], 4: ['targetPrice', 'maxApprovedPrice'], 5: ['evidenceSource'] }[wizard.step] || [];
+  for (const id of ids) {
+    const el = $(`#wz-${id}`);
+    if (el) wizard.values[id] = el.value;
+  }
+}
+async function loadWizardPreview() {
+  const w = wizard;
+  w.previewLoading = true; w.preview = null; w.previewError = null; renderCreateWizard();
+  try {
+    w.preview = await api('/api/cases/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(wizardPayload(w.values)) });
+  } catch (err) {
+    w.previewError = err.message;
+  } finally {
+    if (wizard !== w) return; // user cancelled or left while the preview was loading
+    w.previewLoading = false;
+    // Keep anything typed into the evidence-source box while loading.
+    const ev = $('#wz-evidenceSource');
+    if (ev) w.values.evidenceSource = ev.value;
+    if (view === 'create') renderCreateWizard();
+  }
 }
 
 // ---------- case workspace ----------
@@ -539,8 +767,12 @@ function courtMeans(c) {
   for (const [code, readers] of Object.entries(cs.scores)) {
     const means = {};
     for (const crit of cs.criteria) {
-      const vals = Object.values(readers).map((r) => r[crit]);
-      means[crit] = vals.reduce((a, b) => a + b, 0) / vals.length;
+      // Average only the scores actually submitted for this sample:
+      // a partially-rated sample has no entry for readers who have not
+      // rated yet, and they must not drag the mean toward 0 or NaN
+      // (P0 C2, QA 2026-11-06).
+      const vals = Object.values(readers).map((r) => r[crit]).filter((v) => typeof v === 'number');
+      means[crit] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
     }
     out[code] = means;
   }
@@ -636,16 +868,21 @@ function courtHeat(c) {
   // A case with no ratings at all (server fallback) has no scores for
   // any sample — render the blind empty state instead of crashing on
   // the missing means. The rating form below still accepts the first
-  // rating, so the case can start from zero.
-  const hasScores = Boolean(cs.scores[sample]);
+  // rating, so the case can start from zero. A sample with SOME ratings
+  // (partial: some readers rated, others not) also renders: a missing
+  // reader score is '—', and range/mean use only the scores present
+  // (P0 C2, QA 2026-11-06 — the old code indexed
+  // cs.scores[sample][r][crit] unconditionally and threw).
+  const hasScores = Boolean(cs.scores[sample] && Object.keys(cs.scores[sample]).length);
   const means = hasScores ? courtMeans(c)[sample] : null;
   const rows = hasScores ? cs.criteria.map((crit) => {
-    const vals = cs.readers.map((r) => cs.scores[sample][r][crit]);
-    const range = Math.max(...vals) - Math.min(...vals);
-    const heat = (v) => v >= 4.5 ? 'heat-5' : v >= 4 ? 'heat-4' : v >= 3.5 ? 'heat-3' : v >= 3 ? 'heat-2' : 'heat-1';
+    const vals = cs.readers.map((r) => cs.scores[sample]?.[r]?.[crit]);
+    const present = vals.filter((v) => typeof v === 'number');
+    const range = present.length ? Math.max(...present) - Math.min(...present) : 0;
+    const heat = (v) => typeof v !== 'number' ? '' : v >= 4.5 ? 'heat-5' : v >= 4 ? 'heat-4' : v >= 3.5 ? 'heat-3' : v >= 3 ? 'heat-2' : 'heat-1';
     return `<tr class="${range >= 2 ? 'disagree' : ''}"><th scope="row">${esc(crit)}${range >= 2 ? ' <span class="disagree-tag">DISAGREE</span>' : ''}</th>
-      ${vals.map((v) => `<td class="num ${heat(v)}">${v}</td>`).join('')}
-      <td class="num">${ts.complete ? means[crit].toFixed(2) : '—'}</td><td class="num">${range}</td></tr>`;
+      ${vals.map((v) => `<td class="num ${heat(v)}">${typeof v === 'number' ? v : '—'}</td>`).join('')}
+      <td class="num">${ts.complete && means && typeof means[crit] === 'number' ? means[crit].toFixed(2) : '—'}</td><td class="num">${range}</td></tr>`;
   }).join('') : `<tr><td colspan="${cs.readers.length + 3}">No ratings submitted yet for this sample — be the first to rate it below.</td></tr>`;
   const leader = Object.entries(courtMeans(c)).sort((a, b) => b[1].overall - a[1].overall)[0];
   // The sample→version mapping is blind information: show codes only
@@ -832,9 +1069,14 @@ function bindCaseEvents(c) {
     const scores = {};
     $$('#rating-form input[data-crit]').forEach((inp) => { scores[inp.dataset.crit] = Number(inp.value); });
     try {
-      const res = await api('/api/court/rate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, reader: $('#rating-reader').value, sample: $('#rating-sample').value, scores }) });
-      note.textContent = res.tally ? 'Rating saved — the tally is complete and is shown above.' : `Rating saved — ${res.count} of ${res.expected} ratings in. The tally stays hidden until all are submitted.`;
+      const res = await api('/api/court/rate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, reader: $('#rating-reader').value, sampleCode: $('#rating-sample').value, scores }) });
+      // The confirmation must be set AFTER the re-render: renderCase()
+      // rebuilds the view (including #rating-note), so a note set before
+      // it is wiped within milliseconds and the user never sees it.
+      const msg = res.tally ? 'Rating saved — the tally is complete and is shown above.' : `Rating saved — ${res.submitted} of ${res.expected} ratings in. The tally stays hidden until all are submitted.`;
       await reloadCase(c); renderCase();
+      const fresh = $('#rating-note');
+      if (fresh) fresh.textContent = msg;
     } catch (err) { note.textContent = `Could not save the rating: ${err.message}`; }
   });
   const ab = $('#approve-btn');

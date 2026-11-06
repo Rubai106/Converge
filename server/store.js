@@ -5,8 +5,13 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
-const file = join(dir, 'converge.json');
+// CONVERGE_DATA_FILE lets tests point the store at a scratch file
+// instead of the shared demo data (the full suite runs test files in
+// parallel; two files backing up/restoring the same file race).
+// Default is the repo's data/converge.json.
+const defaultDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'data');
+const file = process.env.CONVERGE_DATA_FILE || join(defaultDir, 'converge.json');
+const dir = dirname(file);
 
 export function seedData() {
   return {
@@ -112,12 +117,14 @@ export function load() {
       if (c[k] === undefined) { c[k] = v; changed = true; }
     }
   }
-  // QA 2026-11-06: cases recorded as APPROVED/COMPLETED/REJECTED could
-  // still carry a stale pendingApproval (the engine used to leave it
-  // set). A decided case has nothing pending; clear it. The approval
-  // record and the audit trail are untouched.
+  // QA 2026-11-06 (P0 C3): cases recorded in any state other than
+  // AWAITING_APPROVAL could still carry a stale pendingApproval (the
+  // engine used to leave it set on APPROVED/REJECTED, and on the
+  // DISCUSSION step-back). A case that is not awaiting approval has
+  // nothing pending; clear it. The approval record and the audit trail
+  // are untouched.
   for (const c of d.cases) {
-    if (['APPROVED', 'COMPLETED', 'REJECTED'].includes(c.state) && c.pendingApproval) {
+    if (c.state !== 'AWAITING_APPROVAL' && c.pendingApproval) {
       c.pendingApproval = null; changed = true;
     }
   }

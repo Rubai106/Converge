@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { haggleAnalysis, haggleStrategies, courtConflicts, courtTally, extractClaims, setClaimStatus, transitionCase, audit, canTransition } from './engine.js';
+import { haggleAnalysis, haggleStrategies, normalizeHaggleInputs, courtConflicts, courtTally, extractClaims, setClaimStatus, transitionCase, audit, canTransition } from './engine.js';
 import { load, save, getCase } from './store.js';
 import { createStubState, stubHealth, stubRegisterAgent, stubGetOps, stubCallOp } from './stub-switch.js';
 import { probeHealth, getOps, callOp, withRoomConnection, registerAgent, agentProfile, SWITCH_VERSION } from './switch-client.js';
@@ -51,6 +51,96 @@ async function ensureRealRoom(c) {
   c.switchRoomId = roomId;
   save(data);
   return roomId;
+}
+
+// ---------- guided HAGGLE case creation (POST /api/cases, /api/cases/preview) ----------
+// All money is computed by the deterministic engine (haggleAnalysis /
+// haggleStrategies) — never by an LLM. Validation names the offending
+// field in every 400 so the guided UI can point at the right input.
+const HAGGLE_UNITS = ['fl oz', 'oz', 'lb', 'kg', 'g', 'L', 'ml', 'each', 'serving'];
+const HAGGLE_NUMERIC_RANGES = {
+  oldPrice: { min: 0, exclusiveMin: false },
+  newPrice: { min: 0, exclusiveMin: false },
+  qtyPerServing: { min: 0, exclusiveMin: true },
+  otherIngredientsCostPerServing: { min: 0, exclusiveMin: false },
+  menuPrice: { min: 0, exclusiveMin: true },
+  monthlySales: { min: 0, exclusiveMin: false },
+  targetFoodCostPct: { min: 0, exclusiveMin: true },
+};
+
+const slugify = (s) => String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+function nextHaggleId(d) {
+  let max = 0;
+  let any = false;
+  for (const c of d.cases) {
+    const m = /^HAG-(\d+)$/.exec(c.id || '');
+    if (m) { any = true; max = Math.max(max, Number(m[1])); }
+  }
+  if (!any) return `HAG-${Date.now()}`; // Fallback when no HAG-* id parses.
+  let n = max + 1;
+  let id = `HAG-${String(n).padStart(3, '0')}`;
+  while (d.cases.some((c) => c.id === id)) { n += 1; id = `HAG-${String(n).padStart(3, '0')}`; }
+  return id;
+}
+
+// Validates a HAGGLE creation payload. Returns the normalised input
+// (engine-normalised numerics + validated strings). Throws an Error
+// naming the field on any invalid input; callers turn it into a 400.
+function validateHaggleCreation(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error('Request body must be a JSON object.');
+  }
+  if (body.workflow !== undefined && body.workflow !== null && body.workflow !== 'HAGGLE') {
+    throw new Error('only HAGGLE creation is supported');
+  }
+  for (const f of ['supplier', 'ingredient']) {
+    if (typeof body[f] !== 'string' || !body[f].trim()) {
+      throw new Error(`${f} must be a non-empty string.`);
+    }
+  }
+  if (typeof body.unit !== 'string' || !HAGGLE_UNITS.includes(body.unit)) {
+    throw new Error(`unit must be one of: ${HAGGLE_UNITS.join(', ')}.`);
+  }
+  // Field-specific finite/range checks (so the message names the field),
+  // then the engine's own normaliser as the canonical pass.
+  for (const [k, { min, exclusiveMin }] of Object.entries(HAGGLE_NUMERIC_RANGES)) {
+    const v = Number(body[k]);
+    if (!Number.isFinite(v)) throw new Error(`${k} must be a finite number.`);
+    if (exclusiveMin ? !(v > min) : !(v >= min)) {
+      throw new Error(`${k} must be ${exclusiveMin ? 'greater than' : 'at least'} ${min}.`);
+    }
+  }
+  for (const k of ['targetPrice', 'maxApprovedPrice']) {
+    const v = Number(body[k]);
+    if (!Number.isFinite(v)) throw new Error(`${k} must be a finite number.`);
+    if (v < 0) throw new Error(`${k} must be at least 0.`);
+  }
+  if (Number(body.targetPrice) > Number(body.maxApprovedPrice)) {
+    throw new Error('targetPrice must be less than or equal to maxApprovedPrice.');
+  }
+  if (body.recipe !== undefined && body.recipe !== null && typeof body.recipe !== 'string') {
+    throw new Error('recipe must be a string.');
+  }
+  if (body.evidenceSource !== undefined && body.evidenceSource !== null && typeof body.evidenceSource !== 'string') {
+    throw new Error('evidenceSource must be a string.');
+  }
+  const numeric = normalizeHaggleInputs(body);
+  return {
+    supplier: body.supplier.trim(),
+    ingredient: body.ingredient.trim(),
+    recipe: typeof body.recipe === 'string' ? body.recipe : '',
+    oldPrice: numeric.oldPrice,
+    newPrice: numeric.newPrice,
+    unit: body.unit,
+    qtyPerServing: numeric.qtyPerServing,
+    otherIngredientsCostPerServing: numeric.otherIngredientsCostPerServing,
+    menuPrice: numeric.menuPrice,
+    monthlySales: numeric.monthlySales,
+    targetFoodCostPct: numeric.targetFoodCostPct,
+    targetPrice: Number(body.targetPrice),
+    maxApprovedPrice: Number(body.maxApprovedPrice),
+  };
 }
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.md': 'text/markdown' };
@@ -98,6 +188,59 @@ const server = createServer(async (req, res) => {
     }
     // --- API: cases ---
     if (url.pathname === '/api/cases' && req.method === 'GET') return send(res, 200, data.cases.map(publicCaseView));
+    // --- API: guided HAGGLE case creation (no LLM money maths) ---
+    if (url.pathname === '/api/cases/preview' && req.method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const input = validateHaggleCreation(body);
+        const analysis = haggleAnalysis(input);
+        return send(res, 200, { analysis, strategies: haggleStrategies(analysis, input) });
+      } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
+    }
+    if (url.pathname === '/api/cases' && req.method === 'POST') {
+      const body = await readBody(req);
+      let input;
+      try { input = validateHaggleCreation(body); } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
+      const id = nextHaggleId(data);
+      const evidenceSource = typeof body.evidenceSource === 'string' ? body.evidenceSource.trim() : '';
+      const c = {
+        id, workflow: 'HAGGLE', title: `${input.supplier} ${input.ingredient} price rise`,
+        state: 'DISCUSSION', demo: true,
+        participants: [
+          { name: 'Mara (owner)', role: 'owner', kind: 'human' },
+          { name: 'Negotiation Agent', role: 'negotiator', kind: 'agent' },
+          { name: 'Financial Analyst', role: 'analyst', kind: 'agent' },
+        ],
+        input,
+        switchRoom: `#haggle-${slugify(input.supplier)}-${slugify(input.ingredient)}`,
+        switchRoomId: null,
+        proposals: [], pendingApproval: null, approval: null,
+        audit: [], messages: [],
+        evidence: evidenceSource
+          ? [{ id: 'E1', type: 'source', source: evidenceSource, status: 'Unverified', note: 'Source provided at case creation; not verified.' }]
+          : [],
+      };
+      audit(c, { name: 'Owner', kind: 'human' }, 'case-created', { supplier: input.supplier, ingredient: input.ingredient });
+      data.cases.push(c);
+      // Room creation must never fail the case: a room failure is
+      // reported as roomError on the 201 response, and the case stands.
+      let roomError = null;
+      try {
+        if (realSwitch) {
+          await ensureRealRoom(c);
+        } else {
+          const room = stubCallOp(stub, 'create_room', { name: c.switchRoom, members: c.participants.map((p) => p.name) });
+          if (!room?.id) throw new Error('stub create_room returned no room id');
+          c.switchRoomId = room.id;
+          c.switchRoomSimulated = true;
+        }
+      } catch (e) { roomError = String(e.message || e); }
+      save(data);
+      const analysis = haggleAnalysis(c.input);
+      const out = { ...c, analysis, strategies: haggleStrategies(analysis, c.input) };
+      if (roomError) out.roomError = roomError;
+      return send(res, 201, out);
+    }
     if (url.pathname === '/api/status' && req.method === 'GET') {
       let switchHealth = stubHealth();
       if (SWITCH_BASE_URL) { try { switchHealth = await probeHealth(SWITCH_BASE_URL); } catch (e) { switchHealth = { ok: false, error: String(e) }; } }
