@@ -7,16 +7,18 @@
 // app/app.js + app/index.html in the style of
 // tests/remediation-haggle.test.js (pure helpers extracted from the
 // shipped source and run). Server behaviour is exercised live against
-// a scratch data file (a temp copy of the demo data), never the shared
-// data/converge.json — see tests/case-creation.test.js.
+// a scratch data file (isolated seed data in a temp dir), never the
+// shared data/converge.json — which is gitignored and absent after a
+// fresh clone. See tests/case-creation.test.js.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { copyFileSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { switchTimelineToMessages } from '../server/switch-client.js';
+import { seedData } from '../server/store.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = readFileSync(join(root, 'app', 'app.js'), 'utf8');
@@ -148,10 +150,9 @@ test('fixround M21: switchTimelineToMessages tolerates an empty or missing resul
 });
 
 // ---------- GAP-1 + messages endpoint: live server on a scratch file ----------
-const realDataFile = join(root, 'data', 'converge.json');
 const scratchDir = mkdtempSync(join(tmpdir(), 'converge-fixround-'));
 const dataFile = join(scratchDir, 'converge.json');
-copyFileSync(realDataFile, dataFile);
+writeFileSync(dataFile, JSON.stringify(seedData()));
 const PORT = 3197;
 const base = `http://localhost:${PORT}`;
 let child;

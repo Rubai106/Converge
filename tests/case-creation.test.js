@@ -1,23 +1,23 @@
 // CONVERGE case-creation tests — guided HAGGLE creation (POST /api/cases)
 // and its no-persistence preview (POST /api/cases/preview).
-// Spawns the real server on a test port against a SCRATCH data file (a
-// temp copy of the demo data), never the shared data/converge.json:
-// the full suite runs test files in parallel, and two files backing
-// up/restoring the same file race (a scratch case once survived on disk).
+// Spawns the real server on a test port against a SCRATCH data file
+// (isolated seed data in a temp dir), never the shared data/converge.json
+// — which is gitignored and absent after a fresh clone. The full suite
+// runs test files in parallel, and two files sharing one data file race.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { haggleAnalysis, haggleStrategies } from '../server/engine.js';
+import { seedData } from '../server/store.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const realDataFile = join(root, 'data', 'converge.json');
 const scratchDir = mkdtempSync(join(tmpdir(), 'converge-create-'));
 const dataFile = join(scratchDir, 'converge.json');
-copyFileSync(realDataFile, dataFile);
+writeFileSync(dataFile, JSON.stringify(seedData()));
 const PORT = 3198;
 const base = `http://localhost:${PORT}`;
 

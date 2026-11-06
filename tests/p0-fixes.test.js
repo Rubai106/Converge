@@ -8,15 +8,15 @@
 // C3: pendingApproval survived the AWAITING_APPROVAL -> DISCUSSION
 //     step-back in the engine and in the store load() migration.
 //
-// Server tests use a SCRATCH data file (a temp copy of the demo data),
-// never the shared data/converge.json: the full suite runs test files
-// in parallel, and two files backing up/restoring the same file race
-// (a scratch case once survived on disk). Port 3299 (not 3199) so this
-// file can run alongside server.test.js in the full suite.
+// Server tests use a SCRATCH data file (isolated seed data in a temp
+// dir), never the shared data/converge.json — which is gitignored and
+// absent after a fresh clone. The full suite runs test files in
+// parallel, and two files sharing one data file race. Port 3299 (not
+// 3199) so this file can run alongside server.test.js in the full suite.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,15 +24,15 @@ import { transitionCase } from '../server/engine.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const appSrc = readFileSync(join(root, 'app', 'app.js'), 'utf8');
-const realDataFile = join(root, 'data', 'converge.json');
 // Scratch data dir for this file run. CONVERGE_DATA_FILE must be set
-// before store.js is evaluated (static imports hoist), so load() is
-// imported dynamically below.
+// before store.js is evaluated (static imports hoist), so load() and
+// seedData() are imported dynamically below — a static store.js import
+// would capture the default data path before the env is set.
 const scratchDir = mkdtempSync(join(tmpdir(), 'converge-p0-'));
 const dataFile = join(scratchDir, 'converge.json');
-copyFileSync(realDataFile, dataFile);
 process.env.CONVERGE_DATA_FILE = dataFile;
-const { load } = await import('../server/store.js');
+const { load, seedData } = await import('../server/store.js');
+writeFileSync(dataFile, JSON.stringify(seedData()));
 const PORT = 3299;
 const base = `http://localhost:${PORT}`;
 

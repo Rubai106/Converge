@@ -13,13 +13,10 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, renameSync, existsSync }
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { chromium } from 'playwright';
 import { seedData } from '../server/store.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const require = createRequire(import.meta.url);
-const { chromium } = require('/home/hatch/workspace/fieldwork-portfolio/node_modules/playwright-core');
-const CHROME = '/home/hatch/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome';
 
 const PORT = 3213;
 const base = `http://127.0.0.1:${PORT}`;
@@ -58,7 +55,7 @@ test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(seedData()));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
-  browser = await chromium.launch({ executablePath: CHROME });
+  browser = await chromium.launch();
 });
 
 test.after(async () => {

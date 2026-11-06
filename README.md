@@ -53,7 +53,7 @@ Supplier commitments, prices and contract terms, final recipe selection, editori
 ## 9. How to install and reproduce the demo
 ```
 node --version   # >= 22
-npm test         # 151/151 (engine + server persistence + Switch-client + COURT blindness + escaping + HAGGLE creation + remediation + NEW-1 deep links + GAP-2 Submit for approval)
+npm test         # 161/161 (engine + server persistence + Switch-client + COURT blindness + escaping + HAGGLE creation + remediation + NEW-1 deep links + GAP-2 Submit for approval + portability)
 npm run check    # node --check on all server files
 PORT=3100 npm start   # http://localhost:3100 (port 3000 is the Switch gateway)
 ```

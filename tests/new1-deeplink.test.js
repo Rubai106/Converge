@@ -13,20 +13,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { copyFileSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRequire } from 'node:module';
+import { chromium } from 'playwright';
 import { seedData } from '../server/store.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = readFileSync(join(root, 'app', 'app.js'), 'utf8');
-const require = createRequire(import.meta.url);
-// playwright-core lives in a sibling workspace project (fieldwork);
-// — the CONVERGE repo itself has no browser dependency.
-const { chromium } = require('/home/hatch/workspace/fieldwork-portfolio/node_modules/playwright-core');
-const CHROME = '/home/hatch/.cache/ms-playwright/chromium-1248/chrome-linux64/chrome';
 
 const PORT = 3211;
 const base = `http://127.0.0.1:${PORT}`;
@@ -99,7 +94,7 @@ test.before(async () => {
   writeFileSync(dataFile, JSON.stringify(seedData()));
   child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
-  browser = await chromium.launch({ executablePath: CHROME });
+  browser = await chromium.launch();
 });
 
 test.after(async () => {

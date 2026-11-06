@@ -1,21 +1,24 @@
 // CONVERGE server tests — persistence of COURT ratings and CORRECTION claim statuses.
-// Spawns the real server on a test port, backs up data/converge.json first,
-// restores it afterwards, so the demo data is left pristine.
+// Spawns the real server on a test port against a SCRATCH data file
+// (isolated seed data in a temp dir), never the shared data/converge.json
+// — which is gitignored and absent after a fresh clone. The scratch
+// case CRT-TEST is injected into the seed data before the server starts.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { seedData } from '../server/store.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const dataFile = join(root, 'data', 'converge.json');
+const scratchDir = mkdtempSync(join(tmpdir(), 'converge-server-'));
+const dataFile = join(scratchDir, 'converge.json');
 const PORT = 3199;
 const base = `http://localhost:${PORT}`;
 
 let child;
-let backup = null;
-let hadData = false;
 
 async function waitForServer() {
   for (let i = 0; i < 40; i++) {
@@ -26,13 +29,10 @@ async function waitForServer() {
 }
 
 test.before(async () => {
-  hadData = existsSync(dataFile);
-  if (hadData) backup = readFileSync(dataFile, 'utf8');
   // Inject a scratch incomplete COURT case (CRT-TEST: a clone of CRT-007
-  // with only 4 of 9 ratings) so the blindness tests have a live
-  // incomplete case. It is written to the same data file the server
-  // loads, and removed again when the backup is restored in after().
-  const d = JSON.parse(backup);
+  // with only 4 of 9 ratings) into the isolated seed data, so the
+  // blindness tests have a live incomplete case.
+  const d = seedData();
   const seed = d.cases.find((x) => x.id === 'CRT-007');
   const clone = JSON.parse(JSON.stringify(seed));
   clone.id = 'CRT-TEST';
@@ -40,13 +40,13 @@ test.before(async () => {
   clone.ratings = clone.ratings.slice(0, 4); // A/B/C on S1, A on S2
   d.cases.push(clone);
   writeFileSync(dataFile, JSON.stringify(d, null, 2));
-  child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
+  child = spawn('node', ['server/server.js'], { cwd: root, env: { ...process.env, PORT: String(PORT), CONVERGE_DATA_FILE: dataFile }, stdio: 'ignore' });
   await waitForServer();
 });
 
 test.after(() => {
   child?.kill();
-  if (hadData) writeFileSync(dataFile, backup);
+  rmSync(scratchDir, { recursive: true, force: true });
 });
 
 test('COURT: seeded ratings are complete and the tally matches the seed', async () => {

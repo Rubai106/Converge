@@ -2,21 +2,43 @@
 
 ## Requirements
 - Node.js >= 22 (`node --version`)
-- No npm dependencies, no database server.
-- The app alone runs in SIMULATED-STUB mode (labelled). For a REAL Switch
-  run you need a switch-core 0.31.0 server + Mattermost — see "Real Switch"
-  below.
+- No runtime npm dependencies, no database server. Playwright is a
+  devDependency, used only by the browser tests (see below).
 
 ## Run the demo (app only)
 ```
 git clone https://github.com/Rubai106/accordweave.git
 cd accordweave
-npm test               # expect 151/151
+npm install                  # installs Playwright (devDependency)
+npx playwright install chromium   # one-time browser download (see below)
+npm test               # expect 161/161
 npm run check          # node --check on server files
 PORT=3100 npm start
 # open http://localhost:3100
 ```
 (Port 3000 is the Switch gateway, not the app.)
+
+## Browser tests (Windows and Linux)
+Three test files drive a real browser (GAP-2 journey, NEW-1 deep links,
+staleness refresh). They use the `playwright` package, which finds its
+own Chromium per OS — no paths to edit, no manual `npm start` before
+`npm test` (each test spawns its own server on an isolated seed file
+in a temp dir; the repo's `data/converge.json` is gitignored and is
+never read by the tests).
+
+One-time setup, same command on Windows (PowerShell/CMD) and Linux:
+```
+npm install
+npx playwright install chromium
+```
+`npx playwright install chromium` downloads the Chromium build that
+matches the pinned Playwright version (see `package-lock.json`) into
+Playwright's per-user cache (`%USERPROFILE%\AppData\Local\ms-playwright`
+on Windows, `~/.cache/ms-playwright` on Linux). If it is already
+installed, the command is a no-op. On Linux, Playwright may also need
+system libraries — run `npx playwright install-deps chromium` (needs
+sudo) if the browser fails to launch with a missing-library error.
+On Windows, no extra step is needed beyond the download.
 
 ## Real Switch — two paths
 ### A. Official path: Docker Compose (supported, on a Docker-capable machine)

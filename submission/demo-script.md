@@ -85,7 +85,7 @@ Say the framing line first: "Same engine, a completely different kind of disagre
   delivery, live drawer, HAG-014 COMPLETED/P2).
 
 ## Reproduce it
-`npm test` (151/151) → `npm start` (with the real Switch env — see
+`npm test` (161/161) → `npm start` (with the real Switch env — see
 `.env.example`) → http://localhost:3100 → open HAG-014 → open the room →
 see the approval in the Audit tab.
 
