@@ -93,6 +93,10 @@ test('H8: AWAITING_APPROVAL offers only DISCUSSION in the Move dropdown', () => 
 test('H8/GAP-1: PROPOSAL offers no AWAITING_APPROVAL or REJECTED; APPROVED still offers COMPLETED', () => {
   assert.deepEqual(moveOptions('PROPOSAL'), ['DISCUSSION', 'CANCELLED']);
   assert.deepEqual(moveOptions('APPROVED'), ['COMPLETED', 'BLOCKED']);
+  // 2026-11-06: DISCUSSION no longer offers PROPOSAL — a proposal only
+  // exists when Submit for approval attaches a strategy and terms, so
+  // moving to PROPOSAL on its own just changed a label.
+  assert.deepEqual(moveOptions('DISCUSSION'), ['BLOCKED', 'CANCELLED']);
   for (const state of ['DRAFT', 'DISCUSSION', 'PROPOSAL', 'AWAITING_APPROVAL', 'APPROVED', 'REJECTED']) {
     assert.ok(!moveOptions(state).includes('APPROVED'), `${state} still offers APPROVED`);
     assert.ok(!moveOptions(state).includes('REJECTED'), `${state} still offers REJECTED`);
@@ -100,6 +104,7 @@ test('H8/GAP-1: PROPOSAL offers no AWAITING_APPROVAL or REJECTED; APPROVED still
     // AWAITING_APPROVAL — entering it bare strands the case with no
     // pending approval and no Approve/Reject path.
     assert.ok(!moveOptions(state).includes('AWAITING_APPROVAL'), `${state} still offers AWAITING_APPROVAL`);
+    assert.ok(!moveOptions(state).includes('PROPOSAL'), `${state} still offers PROPOSAL`);
   }
 });
 
@@ -154,10 +159,15 @@ test('H9: approvedStrategy resolves the approved proposal to its engine strategy
 });
 
 test('H9: the summary panel shows the approved strategy impact, labelled when approved', () => {
+  // The approved-strategy resolution lives in haggleHeroFigures
+  // (2026-11-06), shared by the Overview key figures and the Analysis
+  // chart so both panels always agree; haggleSummary consumes it.
+  const hero = fnBody('haggleHeroFigures');
+  assert.ok(hero.includes('approvedStrategy(c)'), 'haggleHeroFigures must resolve the approved strategy');
+  assert.ok(hero.includes('Approved terms:'), 'approved hero must be labelled as approved terms');
+  assert.ok(hero.includes('If the'), 'unapproved hero must be labelled as the if-accepted figure');
   const body = fnBody('haggleSummary');
-  assert.ok(body.includes('approvedStrategy(c)'), 'haggleSummary must resolve the approved strategy');
-  assert.ok(body.includes('Approved terms:'), 'approved hero must be labelled as approved terms');
-  assert.ok(body.includes('If the'), 'unapproved hero must be labelled as the if-accepted figure');
+  assert.ok(body.includes('haggleHeroFigures(c)'), 'haggleSummary must use the shared hero figures');
 });
 
 // ---------- H10: reject is a two-step confirmation ----------

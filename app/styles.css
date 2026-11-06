@@ -127,6 +127,12 @@ tbody tr.sel td:first-child{padding-left:8px}
 .kpi small{display:block;color:var(--soft);font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600}
 .kpi b{display:block;font:600 22px/1.2 var(--mono);font-variant-numeric:tabular-nums;margin-top:5px}
 .kpi .kpi-note{font-size:11px;color:var(--faint);margin-top:3px}
+/* Dashboard attention cue (2026-11-06): when something awaits a human
+   decision, the KPI and its rows carry a soft amber tint so the eye
+   goes straight to what needs deciding. Neutral when nothing awaits. */
+.kpi-attention{background:var(--amber-bg);border-color:#E8D48A}
+.kpi-attention b{color:#6E5700}
+.decision-attention{border-left:3px solid #C98A1B;padding-left:10px}
 .dash-lower{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
 .decision-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
   padding:9px 0;border-bottom:1px solid var(--line-soft)}
@@ -175,11 +181,12 @@ tbody tr.sel td:first-child{padding-left:8px}
 .kv dd{margin:0;text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
 .bullet-wrap{margin:10px 0 4px}
 .bullet{height:10px;background:#E8EDF1;border-radius:2px;position:relative}
-.bullet .bullet-bar{position:absolute;left:0;top:0;bottom:0;background:var(--red);border-radius:2px}
+.bullet .bullet-bar{position:absolute;left:0;top:0;bottom:0;background:var(--red);border-radius:2px;max-width:100%}
 .bullet .bullet-target{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink)}
 .bullet .bullet-old{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--soft)}
 .bullet-scale{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);
   font-family:var(--mono);margin-top:4px}
+.bullet-offscale{color:var(--red);margin-top:6px}
 .delta-col{white-space:normal;min-width:24px}
 .bullet-legend{display:flex;gap:14px;font-size:11px;color:var(--soft);margin-top:4px}
 .bullet-legend .legend-old{color:var(--soft);font-weight:700}
@@ -188,6 +195,23 @@ tbody tr.sel td:first-child{padding-left:8px}
 .mandate-box b{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .mandate-box .mandate-title{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
   color:var(--amber);font-weight:700;margin-bottom:4px}
+/* Next step panel (2026-11-06): the one action to take, calm and
+   inviting — a soft teal tint from the existing palette, no new colour. */
+.next-step-panel{background:var(--teal-bg);border-color:#C9E2DB}
+.next-step-panel h2{color:var(--teal-dark)}
+/* Key figures — the three numbers that matter, a touch larger. */
+.key-figures dd{font-size:15px;font-weight:600}
+/* Warning box (2026-11-06): plausibility warnings in the wizard.
+   Same amber family as the mandate box. */
+.warn-box{border:1px solid #E3D3A8;background:#FDF8E7;border-radius:4px;padding:12px 14px;margin-top:14px}
+.warn-box h3{font-size:12px;color:var(--amber);margin-bottom:6px}
+.warn-list{margin:6px 0 10px;padding-left:18px;font-size:12px}
+.warn-list li{margin-bottom:4px}
+.warn-ack{display:flex;gap:8px;align-items:flex-start;font-size:12px;font-weight:600;cursor:pointer}
+.warn-ack input{margin-top:2px}
+/* Text link styled as a link (not a button). */
+.link-btn{border:0;background:none;padding:0;color:var(--teal);text-decoration:underline;font-size:inherit}
+.link-btn:hover{color:var(--teal-dark)}
 .timeline{list-style:none;margin:0;padding:0}
 .timeline li{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-soft);font-size:12px}
 .timeline li:last-child{border-bottom:0}
@@ -294,8 +318,13 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
   .btn,.ghost-btn{min-height:44px}
   .move-to select{min-height:44px}
   .search-wrap input{min-height:44px}
-  /* L17: smaller step labels so "Awaiting approval" fits on one line. */
-  .stepper li{font-size:10px;padding:7px 1px;white-space:nowrap}
+  /* L17 (revised 2026-11-06): the 7 step labels never fit a 390px row —
+     shrinking the type only made them collide ("InvestigatingDiscussion").
+     At phone sizes the stepper scrolls horizontally (same scroll-fade cue
+     as the tabs) and each label keeps its natural width. */
+  .stepper{overflow-x:auto;scrollbar-width:none}
+  .stepper::-webkit-scrollbar{display:none}
+  .stepper li{flex:0 0 auto;min-width:76px;font-size:11px;padding:7px 6px;white-space:nowrap}
   .switch-note{margin:8px 14px 0}
   /* Night hardening 2026-11-06: the 140px search truncated its own
      placeholder ("Search cases, evidence… ⌘K"). On a phone the search

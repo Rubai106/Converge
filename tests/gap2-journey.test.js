@@ -159,14 +159,22 @@ test('gap2: UI-only wizard-to-approval journey (create, submit, approve, complet
     await page.click('#modal-confirm');
     await waitForText(page, '#view', /I approve \$0\.19\/fl oz for 6 weeks, in writing\./, 15000);
     await shot(page, 'gap2-07-approved-audit.png');
-    // 8. Overview: the financial impact panel reflects the APPROVED
-    // strategy, not the unmitigated supplier shock.
-    await page.click('[data-tab="overview"]');
+    // 8. Analysis: the financial impact panel reflects the APPROVED
+    // strategy, not the unmitigated supplier shock. (The chart moved
+    // here from the Overview in 2026-11-06; the Overview keeps the
+    // same figures as key figures.)
+    await page.click('[data-tab="analysis"]');
     await waitForText(page, '#view', /Approved terms: \$0\.19\/fl oz for 6 weeks, in writing/);
     const hero = await page.$eval('.hero', (el) => el.innerText);
     assert.ok(hero.includes('+$0.18'), `hero shows the approved +$0.18/serving (got: ${hero})`);
     assert.ok(!hero.includes('+$0.48'), 'hero must NOT show the unmitigated +$0.48/serving');
     await shot(page, 'gap2-08-approved-impact.png');
+    // The Overview shows the same approved figures as key figures.
+    await page.click('[data-tab="overview"]');
+    await waitForText(page, '#view', /Approved terms: \$0\.19\/fl oz for 6 weeks, in writing/);
+    const keyFigures = await page.$eval('.key-figures', (el) => el.innerText);
+    assert.ok(keyFigures.includes('+$0.18'), `key figures show +$0.18/serving (got: ${keyFigures})`);
+    assert.ok(keyFigures.includes('29.75%'), 'key figures show the approved food cost 29.75%');
     // 9. Mark completed -> COMPLETED; the audit history is correct.
     await page.click('[data-tab="negotiation"]');
     await page.waitForSelector('#complete-btn');

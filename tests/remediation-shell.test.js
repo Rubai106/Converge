@@ -133,8 +133,14 @@ test('L16: claims table has a min-width so the Claim column gets room', () => {
   assert.ok(js.includes('<table class="claims-table">'), 'claims table must carry the class');
 });
 
-test('L17: stepper labels shrink at <=480px so "Awaiting approval" fits one line', () => {
+// L17 (revised 2026-11-06): shrinking the type only made the labels
+// collide ("InvestigatingDiscussion") — the 7 labels never fit a 390px
+// row. At phone sizes the stepper scrolls and each label keeps its
+// natural width.
+test('L17: the stepper scrolls at <=480px so its labels never collide', () => {
   const m = css.match(/@media \(max-width:480px\)\{[\s\S]*?\n\}/);
-  assert.ok(m[0].includes('.stepper li{font-size:10px'), 'stepper labels must shrink');
+  assert.ok(m[0].includes('.stepper{overflow-x:auto'), 'the stepper must scroll at phone sizes');
+  assert.ok(m[0].includes('.stepper li{flex:0 0 auto'), 'step items must keep their natural width');
   assert.ok(m[0].includes('white-space:nowrap'), 'stepper labels must not wrap');
+  assert.ok(!m[0].includes('.stepper li{font-size:10px'), 'the old shrink-the-type fix that collided must be gone');
 });

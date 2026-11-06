@@ -53,10 +53,21 @@ const TERMINAL_NEG = ['REJECTED', 'BLOCKED', 'CANCELLED'];
 // proposal, so offering it stranded the case in AWAITING_APPROVAL with
 // no pending approval and no Approve/Reject buttons (GAP-1, 2026-11-06).
 // The server gate (human-kind + pending-exists) is unchanged; this is
-// the UX path. Pure, so the static tests can exercise it directly.
+// the UX path. PROPOSAL is likewise never offered (2026-11-06): a
+// proposal only exists when "Submit for approval" attaches a strategy
+// and terms to it, so moving to PROPOSAL on its own just changed a
+// label and left users choosing between it and Submit for approval.
+// The forward path is the header's primary action / the Overview's
+// Next step panel, which take the user to Negotiation. Pure, so the
+// static tests can exercise it directly.
 function moveOptions(state) {
-  return (TRANSITIONS[state] || []).filter((t) => t !== 'APPROVED' && t !== 'REJECTED' && t !== 'AWAITING_APPROVAL');
+  return (TRANSITIONS[state] || []).filter((t) => t !== 'APPROVED' && t !== 'REJECTED' && t !== 'AWAITING_APPROVAL' && t !== 'PROPOSAL');
 }
+// Plain-words label for a Move-dropdown option — the dropdown offers
+// backward and housekeeping moves only, so every label says what the
+// move does in the user's language, not the state-machine name.
+const MOVE_LABELS = { DISCUSSION: 'Back to Discussion', INVESTIGATING: 'Back to Investigating', INTAKE: 'Back to Intake', BLOCKED: 'Mark as blocked', CANCELLED: 'Cancel case', COMPLETED: 'Mark as completed' };
+function moveLabel(state) { return MOVE_LABELS[state] || `Move to ${state.replace(/_/g, ' ')}`; }
 
 // HAGGLE strategy -> approval terms. Terms text is the exact wording the
 // owner signs; the price/duration come from the strategy data itself.
@@ -175,7 +186,41 @@ const WIZARD_STEPS = ['Supplier & ingredient', 'Prices & quantity', 'Menu & volu
 const WIZARD_FIELD_STEP = { supplier: 1, ingredient: 1, recipe: 1, oldPrice: 2, newPrice: 2, unit: 2, qtyPerServing: 2, menuPrice: 3, otherIngredientsCostPerServing: 3, monthlySales: 3, targetFoodCostPct: 3, targetPrice: 4, maxApprovedPrice: 4, evidenceSource: 5 };
 let wizard = null;
 function newWizard() {
-  return { step: 1, values: { supplier: '', ingredient: '', recipe: '', oldPrice: '', newPrice: '', unit: 'fl oz', qtyPerServing: '', menuPrice: '', otherIngredientsCostPerServing: '', monthlySales: '', targetFoodCostPct: '30', targetPrice: '', maxApprovedPrice: '', evidenceSource: '' }, errors: {}, preview: null, previewError: null, previewLoading: false, createError: null, creating: false };
+  return { step: 1, values: { supplier: '', ingredient: '', recipe: '', oldPrice: '', newPrice: '', unit: 'fl oz', qtyPerServing: '', menuPrice: '', otherIngredientsCostPerServing: '', monthlySales: '', targetFoodCostPct: '30', targetPrice: '', maxApprovedPrice: '', evidenceSource: '' }, errors: {}, preview: null, previewError: null, previewLoading: false, createError: null, creating: false, acknowledged: false };
+}
+// Plausibility warnings for the HAGGLE wizard (2026-11-06) — never
+// errors, never changes the input. A warning means "check this"; the
+// owner confirms with a checkbox on the review step, so a legitimate
+// loss-making case can still be created. Pure, so the static tests can
+// exercise it directly. `a` is the preview analysis (null before the
+// preview loads — then only the quantity check applies).
+const WIZARD_QTY_PLAUSIBLE_MAX = { 'fl oz': 32, oz: 32, lb: 2, kg: 1, g: 1000, L: 1, ml: 1000, each: 10, serving: 10 };
+function haggleInputWarnings(v, a) {
+  const warnings = [];
+  const qty = Number(v.qtyPerServing);
+  const max = WIZARD_QTY_PLAUSIBLE_MAX[v.unit];
+  if (Number.isFinite(qty) && max !== undefined && qty > max) {
+    warnings.push({ id: 'qty', text: `${v.qtyPerServing} ${v.unit} per serving is unusually large — check the unit and the quantity. A single serving rarely needs more than ${max} ${v.unit}.` });
+  }
+  if (a) {
+    const menu = Number(v.menuPrice);
+    if (Number.isFinite(menu) && a.newTotalCostPerServing > menu) {
+      warnings.push({ id: 'menu', text: `Menu price ${money(menu)} is below the ingredient cost ${money(a.newTotalCostPerServing)} per serving — every serving loses money at these numbers.` });
+    }
+    if (a.newFoodCostPct > 100) {
+      warnings.push({ id: 'foodcost', text: `Food cost is ${pct(a.newFoodCostPct)} — the dish costs more than its menu price.` });
+    }
+    if (a.maxSustainableUnitPrice <= 0) {
+      warnings.push({ id: 'sustainable', text: `No ingredient price can meet the ${v.targetFoodCostPct}% food-cost target at this menu price — the target is unreachable with these numbers.` });
+    }
+  }
+  return warnings;
+}
+// Warnings for the wizard currently on screen (review step only —
+// the analysis-based warnings need the preview).
+function wizardWarnings() {
+  if (!wizard?.preview?.analysis) return [];
+  return haggleInputWarnings(wizard.values, wizard.preview.analysis);
 }
 function validateWizardStep(step, v) {
   const errors = {};
@@ -642,12 +687,12 @@ function renderDashboard() {
   const awaiting = needs.filter((c) => c.state === 'AWAITING_APPROVAL');
   const discussing = needs.filter((c) => c.state === 'DISCUSSION');
   const activity = filteredActivity().slice(0, 6);
-  const needsRows = (list) => list.map((c) => {
+  const needsRows = (list, cls = '') => list.map((c) => {
     const d = details[c.id] || c;
     const need = c.state === 'AWAITING_APPROVAL'
       ? `Approve ${esc(d.pendingApproval?.terms || 'pending terms')}`
       : 'Discussion open — review the versions and vote';
-    return `<div class="decision-row"><div><div class="dr-title"><span class="num">${esc(c.id)}</span> — ${esc(c.title)}</div>
+    return `<div class="decision-row${cls ? ' ' + cls : ''}"><div><div class="dr-title"><span class="num">${esc(c.id)}</span> — ${esc(c.title)}</div>
       <div class="dr-sub">${need}</div></div>
       <button class="ghost-btn btn-sm" data-open="${esc(c.id)}">${c.state === 'AWAITING_APPROVAL' ? 'Review &amp; approve' : 'Open'}</button></div>`;
   }).join('');
@@ -657,14 +702,14 @@ function renderDashboard() {
     <p><button class="btn" id="new-case-btn">+ New supplier case</button></p>
     <div class="kpis" role="group" aria-label="Key figures">
       <div class="kpi"><small>Active cases</small><b>${k.active}</b><div class="kpi-note">${cases.length} total cases${k.qaExcluded ? ` · ${k.qaExcluded} QA ${k.qaExcluded === 1 ? 'copy' : 'copies'} excluded` : ''}</div></div>
-      <div class="kpi"><small>Awaiting approval</small><b>${k.awaiting}</b><div class="kpi-note">human decision required</div></div>
+      <div class="kpi${k.awaiting > 0 ? ' kpi-attention' : ''}"><small>Awaiting approval</small><b>${k.awaiting}</b><div class="kpi-note">human decision required</div></div>
       <div class="kpi"><small>Extra cost this month</small><b>${money(k.extraMonth)}</b><div class="kpi-note">HAGGLE cases, deterministic${k.qaExcluded ? ' · QA copies excluded' : ''}</div></div>
       <div class="kpi"><small>Decisions this week</small><b>${k.decided}</b><div class="kpi-note">approved in the last 7 days</div></div>
     </div>
     <section class="panel" aria-labelledby="needs-h">
       <h2 id="needs-h">Needs your attention</h2>
       ${needs.length ? `
-        ${awaiting.length ? `<h3>Awaiting your approval</h3>${needsRows(awaiting)}` : ''}
+        ${awaiting.length ? `<h3>Awaiting your approval</h3>${needsRows(awaiting, 'decision-attention')}` : ''}
         ${discussing.length ? `<h3>Open discussions</h3>${needsRows(discussing)}` : ''}`
         : `<p class="empty">${searchQuery ? `No attention items match “${esc(searchQuery)}”.` : 'Nothing needs a human decision right now.'}</p>`}
     </section>
@@ -883,10 +928,12 @@ function wizardStepFields() {
     <label>Ingredient <input type="text" id="wz-ingredient" value="${esc(v.ingredient)}" placeholder="e.g. heavy cream" autocomplete="off">${wizardFieldError('ingredient')}</label>
     <label>Recipe (optional) <input type="text" id="wz-recipe" value="${esc(v.recipe)}" placeholder="e.g. Alfredo" autocomplete="off">${wizardFieldError('recipe')}</label>`;
   if (wizard.step === 2) return `
+    <p class="small muted">Price is per the unit you pick below — and the quantity is that same unit in one serving. If your supplier quotes per kg, pick kg; the quantity is then kg per serving.</p>
     ${num('oldPrice', 'Old price ($)', v.oldPrice)}
     ${num('newPrice', 'New price ($)', v.newPrice)}
     <label>Unit <select id="wz-unit">${WIZARD_UNITS.map((u) => `<option value="${esc(u)}" ${v.unit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}</select>${wizardFieldError('unit')}</label>
-    ${num('qtyPerServing', 'Quantity per serving', v.qtyPerServing)}`;
+    ${num('qtyPerServing', 'Quantity per serving', v.qtyPerServing)}
+    <p class="small muted">Example: 6 fl oz, 0.15 kg or 150 g of cream in one serving — not 5 kg. If the quantity looks large, check the unit first.</p>`;
   if (wizard.step === 3) return `
     ${num('menuPrice', 'Menu price ($)', v.menuPrice)}
     ${num('otherIngredientsCostPerServing', 'Other ingredient costs per serving ($)', v.otherIngredientsCostPerServing)}
@@ -929,6 +976,19 @@ function wizardReviewStep() {
       <thead><tr><th scope="col">Option</th><th scope="col" class="num">Price</th><th scope="col" class="num">Food cost</th><th scope="col" class="num">Monthly impact</th></tr></thead>
       <tbody>${strategies.map((s) => `<tr><td><strong>${esc(s.name)}</strong><br><span class="muted small">${esc(s.detail || '')}</span></td><td class="num">${money(s.unitPrice)}</td><td class="num">${pct(s.foodCostPct)}</td><td class="num">${s.extraVsOldPerMonth >= 0 ? '+' : ''}${money(s.extraVsOldPerMonth)}</td></tr>`).join('')}</tbody>
     </table></div>`;
+    // Plausibility warnings (2026-11-06): shown, never silently fixed.
+    // The owner ticks the checkbox to confirm; a legitimate loss-making
+    // case can still be created.
+    const warnings = haggleInputWarnings(v, a);
+    if (warnings.length) {
+      body += `
+    <div class="warn-box" role="alert">
+      <h3>Check these numbers before creating</h3>
+      <p class="small">These look unusual — they might be right, but please check them. Nothing is changed for you.</p>
+      <ul class="warn-list">${warnings.map((w) => `<li>${esc(w.text)}</li>`).join('')}</ul>
+      <label class="warn-ack"><input type="checkbox" id="wz-ack" ${wizard.acknowledged ? 'checked' : ''}> I've checked the numbers — these are correct.</label>
+    </div>`;
+    }
   }
   return `${body}
     <label>Evidence source (optional) <input type="text" id="wz-evidenceSource" value="${esc(v.evidenceSource)}" placeholder="Where the price information came from — e.g. DairyCo invoice" autocomplete="off">${wizardFieldError('evidenceSource')}</label>`;
@@ -955,7 +1015,7 @@ function renderCreateWizard() {
         <div style="display:flex;gap:8px;flex-wrap:wrap;width:100%">
           ${wizard.step > 1 ? '<button class="ghost-btn" type="button" id="wz-back">← Back</button>' : ''}
           ${isLast
-            ? `<button class="btn" type="submit" id="wz-create" ${wizard.creating || wizard.previewLoading || !wizard.preview ? 'disabled' : ''}>Create case</button>`
+            ? `<button class="btn" type="submit" id="wz-create" ${wizard.creating || wizard.previewLoading || !wizard.preview || (wizardWarnings().length > 0 && !wizard.acknowledged) ? 'disabled' : ''}>Create case</button>`
             : '<button class="btn" type="submit" id="wz-next">Continue →</button>'}
           <button class="ghost-btn" type="button" id="wz-cancel">Cancel</button>
         </div>
@@ -964,6 +1024,14 @@ function renderCreateWizard() {
   $('#wz-cancel').addEventListener('click', cancelWizard);
   const back = $('#wz-back');
   if (back) back.addEventListener('click', () => { wizard.errors = {}; wizard.createError = null; wizard.step -= 1; renderCreateWizard(); });
+  // Warning acknowledgement (review step): ticking the box enables
+  // Create without a full re-render, so focus and scroll stay put.
+  const ack = $('#wz-ack');
+  if (ack) ack.addEventListener('change', () => {
+    wizard.acknowledged = ack.checked;
+    const create = $('#wz-create');
+    if (create) create.disabled = wizard.creating || wizard.previewLoading || !wizard.preview || (wizardWarnings().length > 0 && !wizard.acknowledged);
+  });
   const fix = $('#wz-fix-step');
   if (fix) fix.addEventListener('click', () => {
     const field = Object.keys(WIZARD_FIELD_STEP).find((f) => new RegExp(`\\b${f}\\b`).test(wizard.previewError || ''));
@@ -988,6 +1056,11 @@ function renderCreateWizard() {
       return;
     }
     // Step 5: create the case.
+    if (wizardWarnings().length > 0 && !wizard.acknowledged) {
+      wizard.createError = 'Please check the warnings above and tick “I’ve checked the numbers” before creating.';
+      renderCreateWizard();
+      return;
+    }
     const w = wizard;
     wizard.creating = true; wizard.createError = null; renderCreateWizard();
     try {
@@ -1015,7 +1088,7 @@ function readWizardStep() {
 }
 async function loadWizardPreview() {
   const w = wizard;
-  w.previewLoading = true; w.preview = null; w.previewError = null; renderCreateWizard();
+  w.previewLoading = true; w.preview = null; w.previewError = null; w.acknowledged = false; renderCreateWizard();
   try {
     w.preview = await api('/api/cases/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(wizardPayload(w.values)) });
   } catch (err) {
@@ -1031,6 +1104,13 @@ async function loadWizardPreview() {
 }
 
 // ---------- case workspace ----------
+// The case header's one primary action — every workflow. Reuses the
+// Overview's Next step so the header and the Overview never disagree
+// about what to do next.
+function casePrimaryAction(c) {
+  const ns = caseNextStep(c);
+  return ns.button ? { label: ns.button, tab: ns.tab } : null;
+}
 function renderCase() {
   const c = details[currentCaseId];
   const a = c.analysis;
@@ -1043,6 +1123,7 @@ function renderCase() {
     return `<li class="${cls}"${cur}>${s}</li>`;
   }).join('');
   const tabs = [['overview', 'Overview'], ['analysis', 'Analysis'], ['negotiation', 'Negotiation'], ['evidence', 'Evidence'], ['audit', 'Audit']];
+  const primary = casePrimaryAction(c);
   $('#view').innerHTML = `
     <div class="case-head">
       <div>
@@ -1050,8 +1131,9 @@ function renderCase() {
         <p class="case-meta">${esc(c.workflow)} · Room ${esc(c.switchRoom)} · ${statePill(c.state)}${c.demo ? ' · Demo data' : ''}</p>
       </div>
       <div class="move-to">
+        ${primary ? `<button class="btn" type="button" data-goto-tab="${esc(primary.tab)}">${esc(primary.label)}</button>` : ''}
         <label class="visually-hidden" for="move-select">Move case to</label>
-        <select id="move-select">${moveOptions(c.state).map((t) => `<option value="${t}">Move to ${t.replace(/_/g, ' ')}</option>`).join('') || '<option value="">No moves available</option>'}</select>
+        <select id="move-select">${moveOptions(c.state).map((t) => `<option value="${t}">${esc(moveLabel(t))}</option>`).join('') || '<option value="">No moves available</option>'}</select>
         <button class="ghost-btn" id="move-btn" ${moveOptions(c.state).length ? '' : 'disabled'}>Move</button>
         <button class="ghost-btn" id="back-btn">← All cases</button>
       </div>
@@ -1072,6 +1154,9 @@ function renderCase() {
     try { await transition(c.id, to); } catch (e) { showCaseError(e.message); }
   });
   $$('.tab', $('#view')).forEach((t) => t.addEventListener('click', () => { currentTab = t.dataset.tab; renderCase(); syncCaseHash(); }));
+  // In-page shortcuts (header primary action, Overview Next step,
+  // Key figures "Analysis" link): switch to the named tab.
+  $$('[data-goto-tab]', $('#view')).forEach((b) => b.addEventListener('click', () => { currentTab = b.dataset.gotoTab; renderCase(); syncCaseHash(); }));
   // Arrow-key navigation across tabs (QA 2026-11-06): the tabs had
   // role=tab/aria-selected but no keyboard pattern.
   $$('.tab', $('#view')).forEach((t) => t.addEventListener('keydown', (e) => {
@@ -1131,54 +1216,134 @@ function summaryPanel(c) {
   if (c.workflow === 'COURT') return courtSummary(c);
   return correctionSummary(c);
 }
-function haggleSummary(c) {
+// ---------- HAGGLE hero figures, bullet chart, recommendation ----------
+// The hero figures are the APPROVED strategy's impact once an approval
+// exists (H9), else the supplier proposal's unmitigated "if accepted"
+// figures. Shared by the Overview key figures and the Analysis chart so
+// both panels always agree. Pure, so the static tests can exercise it.
+function haggleHeroFigures(c) {
   const a = c.analysis, i = c.input;
-  // H9 (remediation 2026-11-06): once an approval exists, the hero and
-  // every figure in this panel show the APPROVED strategy's impact —
-  // never the unmitigated supplier shock. The supplier's $0.24 proposal
-  // stays visible only as labelled context (Analysis tab). When the
-  // approval carries no known strategy, the hero is explicitly labelled
-  // as the unmitigated "if accepted" figure instead of silently
-  // implying it is the outcome.
   const ap = c.approval ? approvedStrategy(c) : null;
-  const heroPerServing = ap ? ap.creamCostPerServing - a.oldCreamCostPerServing : a.costDiffPerServing;
-  const heroMonthly = ap ? ap.extraVsOldPerMonth : a.monthlyExtraCost;
-  const heroFoodPct = ap ? ap.foodCostPct : a.newFoodCostPct;
-  const heroCream = ap ? ap.creamCostPerServing : a.newCreamCostPerServing;
-  const heroTotal = ap ? ap.totalCostPerServing : a.newTotalCostPerServing;
-  const heroMargin = 100 - heroFoodPct;
-  const heroNote = ap
+  const perServing = ap ? ap.creamCostPerServing - a.oldCreamCostPerServing : a.costDiffPerServing;
+  const monthly = ap ? ap.extraVsOldPerMonth : a.monthlyExtraCost;
+  const foodPct = ap ? ap.foodCostPct : a.newFoodCostPct;
+  const note = ap
     ? `Approved terms: ${esc(c.approval.terms)} — impact of the approved price, not the supplier's ${money(i.newPrice)} proposal (which would be ${signedMoney(a.monthlyExtraCost)}/mo, ${pct(a.newFoodCostPct)} food cost).`
     : (c.approval
       ? `If the ${money(i.newPrice)} rise were accepted — no priced strategy is recorded for this approval.`
       : `If the ${money(i.newPrice)} rise were accepted.`);
-  return `<section class="panel" aria-labelledby="fin-h">
-    <h2 id="fin-h">Financial impact — deterministic</h2>
-    <div class="hero"><span class="hero-neg">${signedMoney(heroPerServing)}</span> <small>/ serving · ${money(heroMonthly)} / month</small></div>
-    <p class="small muted" style="margin:6px 0 0">${heroNote}</p>
-    <p class="small muted" style="margin:6px 0 0">Cream ${money(i.oldPrice)} → ${money(i.newPrice)} / ${esc(i.unit)} (${a.pctChange === null ? '—' : '+' + a.pctChange + '%'}) · ${i.qtyPerServing} ${esc(i.unit)} / ${esc(i.recipe)} · menu ${money(i.menuPrice)}</p>
-    <div class="bullet-wrap">
-      <div class="bullet" role="img" aria-label="Food cost rises from ${pct(a.oldFoodCostPct)} to ${pct(heroFoodPct)}; target is ${i.targetFoodCostPct} percent">
-        <span class="bullet-bar" style="width:${(heroFoodPct / 40 * 100).toFixed(1)}%"></span>
-        <span class="bullet-target" style="left:${(i.targetFoodCostPct / 40 * 100).toFixed(1)}%" title="Target ${i.targetFoodCostPct}%"></span>
-        <span class="bullet-old" style="left:${(a.oldFoodCostPct / 40 * 100).toFixed(1)}%" title="Before ${pct(a.oldFoodCostPct)}"></span>
-      </div>
-      <div class="bullet-scale" aria-hidden="true"><span>0%</span><span>20%</span><span>40%</span></div>
-      <p class="small bullet-legend" aria-hidden="true"><span><span class="legend-old">—</span> Before ${pct(a.oldFoodCostPct)}</span><span><span class="legend-target">|</span> Target ${i.targetFoodCostPct}%</span></p>
-    </div>
-    <p class="small">Food cost ${pct(a.oldFoodCostPct)} → <strong>${pct(heroFoodPct)}</strong> · target ${i.targetFoodCostPct}% · ${money(heroMonthly * 12)}/yr</p>
-    <h3>Financials</h3>
-    <dl class="kv">
-      <dt>Cream / serving</dt><dd>${money(a.oldCreamCostPerServing)} → ${money(heroCream)}</dd>
-      <dt>Food cost / serving</dt><dd>${money(a.oldTotalCostPerServing)} → ${money(heroTotal)}</dd>
-      <dt>Gross margin</dt><dd>${pct(a.oldGrossMarginPct)} → ${pct(heroMargin)}</dd>
-      <dt>Max sustainable price</dt><dd>${money(a.maxSustainableUnitPrice)} / ${esc(i.unit)}</dd>
-      <dt>Volume</dt><dd>${i.monthlySales} servings / month</dd>
+  return { perServing, monthly, foodPct, note, approved: !!ap };
+}
+// Bullet chart scale: the visual scale runs 0–40%. A food-cost value
+// beyond it is clamped to the track and flagged, never drawn outside it
+// — a 600% food cost used to render a 1500%-wide bar across the whole
+// page (HAG-015, Windows 2026-11-06). The exact percentage is always
+// shown in text and in the accessible label; only the drawing is bounded.
+// Pure, so the static tests can exercise it directly.
+const BULLET_SCALE_MAX = 40;
+function bulletPositions(heroPct, oldPct, targetPct) {
+  const clamp = (v) => Math.min(100, Math.max(0, (v / BULLET_SCALE_MAX) * 100));
+  return {
+    bar: clamp(heroPct),
+    old: clamp(oldPct),
+    target: clamp(targetPct),
+    heroOffScale: heroPct > BULLET_SCALE_MAX,
+    oldOffScale: oldPct > BULLET_SCALE_MAX,
+    targetOffScale: targetPct > BULLET_SCALE_MAX,
+  };
+}
+// The recommended next step for a HAGGLE case in DISCUSSION/PROPOSAL:
+// the first strategy (engine order) that stays within the owner's max
+// approved price AND at or under the food-cost target. Falls back to
+// the first within-mandate strategy; null when none meets the mandate.
+// Pure; the recommendation note comes from the strategy itself.
+function recommendedStrategy(c) {
+  const inMandate = (c.strategies || []).filter((s) => s.unitPrice <= c.input.maxApprovedPrice);
+  return inMandate.find((s) => s.foodCostPct <= c.input.targetFoodCostPct) || inMandate[0] || null;
+}
+// Plain-words next step for a COURT case — the stage explained without
+// internal state-machine terms, plus the one action to take. Pure; the
+// button wiring lives in renderCase/bindCaseEvents.
+function courtNextStep(c) {
+  if (c.state === 'REJECTED' || c.state === 'BLOCKED') {
+    return { stage: `This case is ${c.state === 'REJECTED' ? 'rejected' : 'blocked'} — nothing is pending.`, action: `Move it back to Discussion to start again.`, button: null, tab: null };
+  }
+  if (c.canonicalVersion) {
+    const author = (c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion;
+    return { stage: `Canonical version adopted — the decision is recorded.`, action: `Canonical: <strong>${esc(author)}</strong> — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}. The other versions stay on the record as footnotes.`, button: 'View the decision', tab: 'audit' };
+  }
+  const ts = courtTallyState(c);
+  const leader = courtLeader(c);
+  if (ts.complete && leader) {
+    return { stage: `The tally is complete — every reader has rated every sample.`, action: `Leading by blind mean: <strong>${esc(leader.author)} — ${leader.overall.toFixed(2)} / 5</strong>. Next: adopt the canonical version in Negotiation.`, button: 'Adopt the canonical version', tab: 'negotiation' };
+  }
+  return { stage: `Ratings are still coming in.`, action: `<strong>${ts.submitted} of ${ts.expected} ratings in.</strong> The tally, the version mapping and the leader stay hidden until every reader has rated every sample. Next: rate the remaining samples in Analysis.`, button: 'Rate the samples →', tab: 'analysis' };
+}
+// Plain-words next step for a CORRECTION case. Pure.
+function correctionNextStep(c) {
+  if (c.state === 'REJECTED' || c.state === 'BLOCKED') {
+    return { stage: `This case is ${c.state === 'REJECTED' ? 'rejected' : 'blocked'} — nothing is pending.`, action: `Move it back to Discussion to start again.`, button: null, tab: null };
+  }
+  const claims = (c.claims || []).map((cl) => getClaim(c, cl));
+  const unresolved = claims.filter((cl) => cl.status === 'Unresolved').length;
+  if (!claims.length) {
+    return { stage: `No factual claims were found in the transcript.`, action: `Opinions are separated out and never treated as facts.`, button: null, tab: null };
+  }
+  if (unresolved === 0) {
+    const corrected = claims.filter((cl) => cl.status === 'Corrected').length;
+    return { stage: `Every claim is resolved.`, action: `<strong>${corrected} of ${claims.length} claims corrected.</strong> Next: review the errata draft in Negotiation before publishing.`, button: 'Review the errata →', tab: 'negotiation' };
+  }
+  return { stage: `${unresolved} of ${claims.length} claims are still unresolved.`, action: `The guest corrects factual claims with evidence in the Switch room; the host approves the errata before publication. Next: review the claims in Negotiation and challenge or confirm each one.`, button: 'Review the claims →', tab: 'negotiation' };
+}
+// The Next step for any case, by workflow — the header's primary action
+// and the Overview's Next step panel both use this, so they never
+// disagree about what to do next.
+function caseNextStep(c) {
+  if (c.workflow === 'COURT') return courtNextStep(c);
+  if (c.workflow === 'CORRECTION') return correctionNextStep(c);
+  return haggleNextStep(c);
+}
+// Plain-words next step for a HAGGLE case — the stage explained without
+// internal state-machine terms, plus the one action to take. Pure; the
+// button wiring lives in renderCase/bindCaseEvents.
+function haggleNextStep(c) {
+  const rec = recommendedStrategy(c);
+  // The strategy name and its recommendation note only — NOT the
+  // STRATEGY_TERMS text, which is hardcoded to the seed's fl oz prices
+  // ($0.16/$0.19…) and would be wrong for a case in another unit
+  // (e.g. a $4/kg case). The exact terms are shown where the user
+  // submits, in Negotiation.
+  const recLine = rec
+    ? `Suggested first move: <strong>${esc(rec.name)}</strong> (${esc(rec.recommendation || '')})`
+    : `No priced strategy meets the owner's mandate — review them in Negotiation before deciding.`;
+  if (c.state === 'DISCUSSION' || c.state === 'PROPOSAL') {
+    return { stage: `You're in Discussion — the numbers are checked and ${(c.strategies || []).length} strategies are priced.`, action: `${recLine} Next: pick a strategy in Negotiation and submit it for the owner's approval.`, button: 'Review strategies →', tab: 'negotiation' };
+  }
+  if (c.state === 'AWAITING_APPROVAL') {
+    return { stage: `A proposal is waiting for the owner's decision.`, action: `Pending: <strong>${esc(c.pendingApproval?.terms || '')}</strong> — requested by ${esc(c.pendingApproval?.requestedBy || '')}.`, button: 'Review approval', tab: 'negotiation' };
+  }
+  if (c.state === 'APPROVED') {
+    return { stage: `Approved — the owner signed the terms.`, action: `Approved: <strong>${esc(c.approval?.terms || '')}</strong>.`, button: 'View the decision', tab: 'audit' };
+  }
+  if (c.state === 'COMPLETED') {
+    return { stage: `Completed — the decision is recorded.`, action: `Approved: <strong>${esc(c.approval?.terms || '')}</strong>.`, button: 'View the decision', tab: 'audit' };
+  }
+  if (c.state === 'REJECTED' || c.state === 'BLOCKED') {
+    return { stage: `This case is ${c.state === 'REJECTED' ? 'rejected' : 'blocked'} — nothing is pending.`, action: `Move it back to Discussion to start a new proposal.`, button: null, tab: null };
+  }
+  return { stage: `This case is still being set up.`, action: `Move it to Discussion when the numbers are ready.`, button: null, tab: null };
+}
+function haggleSummary(c) {
+  const h = haggleHeroFigures(c);
+  return `<section class="panel" aria-labelledby="key-h">
+    <h2 id="key-h">Key figures</h2>
+    <p class="small muted" style="margin-bottom:10px">${h.note}</p>
+    <dl class="kv key-figures">
+      <dt>Extra cost / serving</dt><dd>${signedMoney(h.perServing)}</dd>
+      <dt>Extra cost / month</dt><dd>${money(h.monthly)}</dd>
+      <dt>Food cost</dt><dd>${pct(h.foodPct)}</dd>
     </dl>
-    <p class="small muted" style="margin-top:10px">Gross ≠ net: rent, labour and overhead are not in this model. Monthly = servings × per-serving difference; annual = monthly × 12.</p>
-    <h3>Owner mandate</h3>
-    <div class="mandate-box"><div class="mandate-title">Mandate — owner</div>
-      Target <b>${money(i.targetPrice)}</b> · Max <b>${money(i.maxApprovedPrice)}</b> · Walk away &gt; <b>${money(i.maxApprovedPrice)}</b></div>
+    <p class="small muted" style="margin-top:10px">Full figures, the food-cost chart and the owner mandate live in <button class="link-btn" type="button" data-goto-tab="analysis">Analysis</button>.</p>
   </section>`;
 }
 // Blind-test completeness: the tally, the sample→version mapping and
@@ -1199,7 +1364,7 @@ function courtSummary(c) {
   const tally = courtMeans(c);
   const leader = Object.entries(tally).sort((a, b) => b[1].overall - a[1].overall)[0];
   const leaderRow = ts.complete
-    ? `<dt>Leading by blind mean</dt><dd>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</dd>`
+    ? `<dt>Leading</dt><dd>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</dd>`
     : `<dt>Tally</dt><dd>Hidden — ${ts.submitted} of ${ts.expected} ratings in</dd>`;
   const canonicalRow = c.canonicalVersion
     ? `<dt>Canonical version</dt><dd>${esc((c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion)} — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}</dd>`
@@ -1209,14 +1374,14 @@ function courtSummary(c) {
     <p class="small" style="margin-bottom:10px">Facilitator view — you can see all versions; tasters see codes only.</p>
     <dl class="kv">
       <dt>Versions</dt><dd>${c.versions.length}</dd>
-      <dt>Conflicting variables</dt><dd>${conflicts} of ${c.conflicts.length}</dd>
+      <dt>Conflicts</dt><dd>${conflicts} of ${c.conflicts.length}</dd>
       <dt>Blind readers</dt><dd>${cs.readers.length}</dd>
       ${leaderRow}
       ${canonicalRow}
     </dl>
     <p class="small muted" style="margin-top:10px">Coded samples, independent ratings (1–5). Scores are shown as submitted; the tally, the version mapping and the leader stay hidden until every reader has submitted. The dissenting version is preserved, never deleted.</p>
     <h3>Versions</h3>
-    <p class="small">${c.versions.map((v) => `<span class="num">${esc(v.id)}</span> ${esc(v.author)}`).join('<br>')}</p>
+    <p class="small">${c.versions.map((v) => esc(v.author)).join('<br>')}</p>
   </section>`;
 }
 function correctionSummary(c) {
@@ -1275,6 +1440,15 @@ function overviewTab(c) {
     parts.push(`<section class="panel"><h2>What happened</h2>
       <p>The Verification Agent extracted ${claims.length} factual claims from the episode transcript. The guest corrects factual claims with evidence in the Switch room; the host approves the errata before publication.</p></section>`);
   }
+  // Next step (2026-11-06): the stage in plain words and the one action
+  // to take — the Overview's job is orientation, not figures. Shared by
+  // all three workflows so the header and the Overview never disagree.
+  const ns = caseNextStep(c);
+  parts.push(`<section class="panel next-step-panel" aria-labelledby="ns-h"><h2 id="ns-h">Next step</h2>
+    <p>${esc(ns.stage)}</p>
+    <p class="small" style="margin-top:6px">${ns.action}</p>
+    ${ns.button ? `<p style="margin-top:10px"><button class="btn" type="button" data-goto-tab="${esc(ns.tab)}">${esc(ns.button)}</button></p>` : ''}
+  </section>`);
   // Participants live in the right rail (railPanels) — the overview tab
   // used to render them a second time (QA 2026-11-06).
   return parts.join('');
@@ -1289,8 +1463,33 @@ function analysisTab(c) {
     const approvedBanner = ap
       ? `<p class="small" style="margin-bottom:10px"><strong>Approved impact: ${signedMoney(ap.extraVsOldPerMonth)} / month · food cost ${pct(ap.foodCostPct)}</strong> (${esc(c.approval.terms)}). The table below is the supplier's ${money(i.newPrice)} proposal if it had been accepted in full.</p>`
       : '';
+    // Financial impact chart — moved here from the Overview (2026-11-06):
+    // the Overview keeps three key figures; the chart and the full
+    // figures live here. The bar is bounded by bulletPositions, so an
+    // extreme food cost (600%) fills the track and is flagged, never
+    // drawn outside it.
+    const h = haggleHeroFigures(c);
+    const bp = bulletPositions(h.foodPct, a.oldFoodCostPct, i.targetFoodCostPct);
+    const chart = `<div class="hero"><span class="hero-neg">${signedMoney(h.perServing)}</span> <small>/ serving · ${money(h.monthly)} / month</small></div>
+      <p class="small muted" style="margin:6px 0 0">${h.note}</p>
+      <p class="small muted" style="margin:6px 0 0">Cream ${money(i.oldPrice)} → ${money(i.newPrice)} / ${esc(i.unit)} (${a.pctChange === null ? '—' : '+' + a.pctChange + '%'}) · ${i.qtyPerServing} ${esc(i.unit)} / ${esc(i.recipe)} · menu ${money(i.menuPrice)}</p>
+      <div class="bullet-wrap">
+        <div class="bullet" role="img" aria-label="Food cost rises from ${pct(a.oldFoodCostPct)} to ${pct(h.foodPct)}; target is ${i.targetFoodCostPct} percent">
+          <span class="bullet-bar" style="width:${bp.bar.toFixed(1)}%"></span>
+          <span class="bullet-target" style="left:${bp.target.toFixed(1)}%" title="Target ${i.targetFoodCostPct}%"></span>
+          <span class="bullet-old" style="left:${bp.old.toFixed(1)}%" title="Before ${pct(a.oldFoodCostPct)}"></span>
+        </div>
+        <div class="bullet-scale" aria-hidden="true"><span>0%</span><span>20%</span><span>${bp.heroOffScale ? '40%+' : '40%'}</span></div>
+        <p class="small bullet-legend" aria-hidden="true"><span><span class="legend-old">—</span> Before ${pct(a.oldFoodCostPct)}</span><span><span class="legend-target">|</span> Target ${i.targetFoodCostPct}%</span></p>
+        ${bp.heroOffScale ? `<p class="small bullet-offscale">${pct(h.foodPct)} is beyond this chart's 0–40% scale — the bar stops at the edge. The figure above is exact.</p>` : ''}
+      </div>
+      <p class="small">Food cost ${pct(a.oldFoodCostPct)} → <strong>${pct(h.foodPct)}</strong> · target ${i.targetFoodCostPct}% · ${money(h.monthly * 12)}/yr</p>
+      <h3>Owner mandate</h3>
+      <div class="mandate-box"><div class="mandate-title">Mandate — owner</div>
+        Target <b>${money(i.targetPrice)}</b> · Max <b>${money(i.maxApprovedPrice)}</b> · Walk away &gt; <b>${money(i.maxApprovedPrice)}</b></div>`;
     return `<section class="panel" aria-labelledby="an-h"><h2 id="an-h">Analysis — deterministic, no LLM maths</h2>
       ${approvedBanner}
+      ${chart}
       <div class="table-wrap"><table>
         <caption>All figures from the shared decision engine; units travel with every number.</caption>
         <thead><tr><th scope="col">Measure</th><th scope="col" class="num">Before</th><th scope="col" class="num">Now</th></tr></thead>
@@ -1302,7 +1501,7 @@ function analysisTab(c) {
           <tr><td>Extra cost</td><td class="num">—</td><td class="num">${money(a.monthlyExtraCost)} / mo · ${money(a.annualExtraCost)} / yr</td></tr>
           <tr><td>Max sustainable price (at ${i.targetFoodCostPct}% target)</td><td class="num" colspan="2">${money(a.maxSustainableUnitPrice)} / ${esc(i.unit)}</td></tr>
         </tbody></table></div>
-      <p class="small muted" style="margin-top:10px">Assumptions: ${i.qtyPerServing} ${esc(i.unit)} per serving · other ingredients ${money(i.otherIngredientsCostPerServing)} · menu ${money(i.menuPrice)} · ${i.monthlySales} servings/month. Evidence: <span class="tag-ev">[E1]</span> invoice, <span class="tag-ev">[E2]</span> recipe.</p>
+      <p class="small muted" style="margin-top:10px">Assumptions: ${i.qtyPerServing} ${esc(i.unit)} per serving · other ingredients ${money(i.otherIngredientsCostPerServing)} · menu ${money(i.menuPrice)} · ${i.monthlySales} servings/month. Evidence: <span class="tag-ev">[E1]</span> invoice, <span class="tag-ev">[E2]</span> recipe. Gross ≠ net: rent, labour and overhead are not in this model. Monthly = servings × per-serving difference; annual = monthly × 12.</p>
     </section>`;
   }
   if (c.workflow === 'COURT') return courtMatrix(c) + courtHeat(c) + courtVersionForm(c);
@@ -1637,12 +1836,15 @@ function auditTab(c) {
 function railPanels(c) {
   const participants = `<section class="panel" aria-labelledby="part-h"><h2 id="part-h">Participants</h2>
     <p class="small">${(c.participants || []).map((p) => `${esc(p.name)} — ${esc(p.role)}${p.kind === 'agent' ? ' · <span style="color:var(--teal-dark);font-weight:600">AGENT</span>' : ''}`).join('<br>')}</p></section>`;
-  const approvals = `<section class="panel" aria-labelledby="appr-h"><h2 id="appr-h">Approvals</h2>
+  // Approvals panel (2026-11-06): shown only when there is something to
+  // show — a pending proposal, a signed approval, or a rejection. An
+  // empty "No pending approval" panel in the rail was noise on every
+  // case that had not reached approval yet.
+  const approvals = (c.pendingApproval || c.approval || c.rejectedTerms) ? `<section class="panel" aria-labelledby="appr-h"><h2 id="appr-h">Approvals</h2>
     ${c.pendingApproval ? `<p class="small">Pending: <strong>${esc(c.pendingApproval.terms)}</strong><br><span class="muted">requested by ${esc(c.pendingApproval.requestedBy)}</span></p>` : ''}
     ${c.approval ? `<div class="approve-stamp" style="margin-top:8px"><span class="stamp-word">Approved ✓</span><br>“I approve ${esc(c.approval.terms)}.” — <b>${esc(c.approval.approvedBy)}</b></div>` : ''}
     ${c.rejectedTerms ? `<p class="small" style="margin-top:8px">Rejected: <strong>${esc(c.rejectedTerms.terms)}</strong><br><span class="muted">rejected by ${esc(c.rejectedTerms.rejectedBy)}, ${fmtDateTime(c.rejectedTerms.rejectedAt)}</span></p>` : ''}
-    ${!c.pendingApproval && !c.approval && !c.rejectedTerms ? '<p class="empty">No pending approval on this case.</p>' : ''}
-  </section>`;
+  </section>` : '';
   const room = `<section class="panel" aria-labelledby="room-h"><h2 id="room-h">Switch room</h2>
     <p class="small"><span class="num">${esc(c.switchRoom)}</span> · ${(c.participants || []).length} members</p>
     <p class="small muted" style="margin:6px 0 10px">${statusData?.switchMode === 'REAL-SWITCH' ? 'Live Switch room — a real Mattermost channel via the Switch bridge. Messages here are real.' : 'SIMULATED — stub server, not Switch. Transcript opens in a drawer.'}</p>

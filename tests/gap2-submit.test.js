@@ -91,7 +91,7 @@ test('gap2: the approval modal re-routes through the shared submit helper with a
 });
 
 test('gap2: GAP-1 safeguards are preserved (dropdown + server gate)', () => {
-  assert.ok(src.includes("filter((t) => t !== 'APPROVED' && t !== 'REJECTED' && t !== 'AWAITING_APPROVAL')"), 'moveOptions still excludes AWAITING_APPROVAL');
+  assert.ok(src.includes("filter((t) => t !== 'APPROVED' && t !== 'REJECTED' && t !== 'AWAITING_APPROVAL' && t !== 'PROPOSAL')"), 'moveOptions still excludes AWAITING_APPROVAL and PROPOSAL');
   const serverSrc = readFileSync(join(root, 'server', 'server.js'), 'utf8');
   assert.ok(serverSrc.includes("proposalId is required to move a case to AWAITING_APPROVAL"), 'the bare-move 400 is intact');
   assert.ok(serverSrc.includes('A proposal is already pending for this case'), 'the duplicate 400 is present');

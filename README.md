@@ -53,11 +53,17 @@ Supplier commitments, prices and contract terms, final recipe selection, editori
 ## 9. How to install and reproduce the demo
 ```
 node --version   # >= 22
-npm test         # 161/161 (engine + server persistence + Switch-client + COURT blindness + escaping + HAGGLE creation + remediation + NEW-1 deep links + GAP-2 Submit for approval + portability)
+npm install      # installs Playwright (development dependency, browser tests only)
+npx playwright install chromium   # one-time browser download for the browser tests
+npm test         # 201/201 (engine + server persistence + Switch-client + COURT blindness + escaping + HAGGLE creation + remediation + NEW-1 deep links + GAP-2 Submit for approval + portability + UX polish + whole-app visual polish)
 npm run check    # node --check on all server files
 PORT=3100 npm start   # http://localhost:3100 (port 3000 is the Switch gateway)
 ```
-No npm dependencies, no database server: data is a JSON file in `data/converge.json`, seeded with fictional demo cases. Open HAG-014, see the analysis and strategies, post in the room (live Switch room when configured; labelled SIMULATED stub otherwise), approve the $0.19 counter as Owner, and watch the audit trail. Then open CRT-007 (conflict table) and COR-003 (claims).
+No runtime npm dependencies and no database server: data is a JSON file in `data/converge.json`, seeded with fictional demo cases. Playwright is a **development dependency only** — it runs the browser tests (`tests/gap2-journey.test.js`, `tests/new1-deeplink.test.js`, `tests/staleness-refresh.test.js`); the app itself (`npm start`) does not need it. Open HAG-014, see the analysis and strategies, post in the room (live Switch room when configured; labelled SIMULATED stub otherwise), approve the $0.19 counter as Owner, and watch the audit trail. Then open CRT-007 (conflict table) and COR-003 (claims).
+
+**Two ways to run the app — kept separate:**
+- **SIMULATED-STUB (default, no Switch server):** just `npm start`. The room is a labelled stub transcript, not Switch. This is the mode for trying the app and running the demo.
+- **REAL-SWITCH (live Switch + Mattermost):** run the Switch stack first (see `submission/setup-guide.md` — Docker Compose on a Docker-capable machine, or the native run in `docs/switch-live-integration.md`), then start the app with `SWITCH_BASE_URL`, `SWITCH_API_KEY`, `SWITCH_AGENT_ID` and `SWITCH_BRIDGE_ID` set. Verify `/api/status` → `switchMode: REAL-SWITCH`.
 
 ## 10. Limitations
 - **No real users yet.** The demo data is fictional and there are no usability sessions or independent evaluation. That is the biggest remaining gap, and it is stated here rather than hidden. See `docs/positioning.md` §5–6.
