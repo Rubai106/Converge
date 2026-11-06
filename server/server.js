@@ -9,10 +9,10 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { haggleAnalysis, haggleStrategies, normalizeHaggleInputs, courtConflicts, courtTally, extractClaims, setClaimStatus, transitionCase, audit, canTransition } from './engine.js';
+import { haggleAnalysis, haggleStrategies, normalizeHaggleInputs, courtConflicts, courtTally, extractClaims, claimEvidenceRefs, setClaimStatus, transitionCase, audit, canTransition, adoptCanonical } from './engine.js';
 import { load, save, getCase } from './store.js';
 import { createStubState, stubHealth, stubRegisterAgent, stubGetOps, stubCallOp } from './stub-switch.js';
-import { probeHealth, getOps, callOp, withRoomConnection, registerAgent, agentProfile, SWITCH_VERSION } from './switch-client.js';
+import { probeHealth, getOps, callOp, withRoomConnection, registerAgent, agentProfile, switchTimelineToMessages, SWITCH_VERSION } from './switch-client.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT || 3000);
@@ -273,11 +273,15 @@ const server = createServer(async (req, res) => {
         out.samples = out.ratingsComplete ? (c.samples || []) : (c.samples || []).map((s) => ({ code: s.code }));
       }
       if (c.workflow === 'CORRECTION') {
-        out.claims = extractClaims(c.transcript).map((cl) => ({
+        const claims = extractClaims(c.transcript).map((cl) => ({
           ...cl,
           status: c.claimStatuses?.[cl.id] || cl.status,
           guestChallenge: c.claimChallenges?.[cl.id] || null,
         }));
+        // L5: each claim's evidence references come from the server
+        // (matched against the case's evidence notes), not a client map.
+        const refs = claimEvidenceRefs(claims, c.evidence || []);
+        out.claims = claims.map((cl) => ({ ...cl, evidence: refs[cl.id] || [] }));
       }
       return send(res, 200, out);
     }
@@ -288,6 +292,39 @@ const server = createServer(async (req, res) => {
       if (!c) return send(res, 404, { error: 'case not found' });
       const body = await readBody(req);
       const actor = { name: body.actor || 'Owner', kind: body.actorKind || 'human' };
+      // GAP-1 (2026-11-06): entering AWAITING_APPROVAL without a proposal
+      // strands the case — no pendingApproval, so no Approve/Reject
+      // buttons and no path forward. The ONLY way in is the approval
+      // modal, which sends proposalId + terms. Reject the bare move here
+      // so the strand is impossible even via a direct API call.
+      if (body.to === 'AWAITING_APPROVAL' && !body.proposalId) {
+        return send(res, 400, { error: 'proposalId is required to move a case to AWAITING_APPROVAL — submit a proposal through the approval flow.' });
+      }
+      // GAP-2 (2026-11-06): a second proposal while one is already
+      // pending would silently overwrite it. The Submit button never
+      // offers this (Approve/Reject render instead), but the API must
+      // enforce it — including against a double-click racing the UI.
+      if (body.to === 'AWAITING_APPROVAL' && c.pendingApproval) {
+        return send(res, 400, { error: 'A proposal is already pending for this case — approve or reject it before submitting another.' });
+      }
+      // GAP-2: a proposalId must name a real strategy for this HAGGLE
+      // case. Proposal IDs are P-numbers, positional in the engine's
+      // strategy order (P1 = first strategy, …); a strategy id, a
+      // P-number beyond the case's strategies, or a malformed id is
+      // rejected. Non-HAGGLE cases carry no strategies, so the check
+      // is HAGGLE-only and their existing behaviour is unchanged.
+      if (body.to === 'AWAITING_APPROVAL' && c.workflow === 'HAGGLE') {
+        let strategies;
+        try {
+          strategies = haggleStrategies(haggleAnalysis(c.input), c.input);
+        } catch (e) {
+          return send(res, 400, { error: `Cannot validate the proposal — this case's inputs are invalid: ${String(e.message || e)}` });
+        }
+        const m = /^P([1-9]\d*)$/.exec(String(body.proposalId || ''));
+        if (!m || Number(m[1]) > strategies.length) {
+          return send(res, 400, { error: `Unknown proposal ${body.proposalId} — submit a proposal for one of this case's strategies (P1–P${strategies.length}).` });
+        }
+      }
       try {
         transitionCase(c, body.to, actor);
         if (body.to === 'AWAITING_APPROVAL' && body.proposalId) c.pendingApproval = { proposalId: body.proposalId, terms: body.terms || '', requestedBy: actor.name };
@@ -318,6 +355,57 @@ const server = createServer(async (req, res) => {
       const expected = readers.length * samples.length;
       const complete = c.ratings.length >= expected;
       return send(res, 200, { submitted: c.ratings.length, expected, complete, tally: complete ? courtTally(c.ratings) : null });
+    }
+    // --- API: court version submission (H11) + canonical adoption (H12) ---
+    // A version may be added only while the case has zero ratings:
+    // adding a sample mid-test would change the tally's expected count.
+    // Human-only, like the other human-only endpoints. The new sample
+    // gets the next code (S4, S5, ...) with its version field, so the
+    // blind mapping stays server-held until the tally completes.
+    if (url.pathname === '/api/court/version' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (body.actorKind !== 'human') return send(res, 400, { error: 'Only a human may submit a version.' });
+      const c = getCase(data, body.caseId);
+      if (!c || c.workflow !== 'COURT') return send(res, 404, { error: 'COURT case not found' });
+      const author = typeof body.author === 'string' ? body.author.trim() : '';
+      if (!author) return send(res, 400, { error: 'author must be a non-empty string.' });
+      if (!body.ingredients || typeof body.ingredients !== 'object' || Array.isArray(body.ingredients) || !Object.keys(body.ingredients).length) {
+        return send(res, 400, { error: 'ingredients must be a non-empty object of ingredient to amount.' });
+      }
+      for (const [k, v] of Object.entries(body.ingredients)) {
+        if (typeof v !== 'string' || !v.trim()) return send(res, 400, { error: `ingredients.${k} must be a non-empty string.` });
+      }
+      if (body.steps !== undefined && body.steps !== null && (!Array.isArray(body.steps) || body.steps.some((s) => typeof s !== 'string' || !s.trim()))) {
+        return send(res, 400, { error: 'steps must be an array of non-empty strings.' });
+      }
+      if ((c.ratings || []).length > 0) {
+        return send(res, 400, { error: `Versions cannot be added once ratings have begun — ${c.ratings.length} rating(s) already submitted. Adding a sample mid-test would change the tally's expected count.` });
+      }
+      let base = slugify(author) || 'version';
+      let id = base; let n = 2;
+      while ((c.versions || []).some((v) => v.id === id)) { id = `${base}-${n}`; n += 1; }
+      const version = { id, author, ingredients: body.ingredients };
+      if (body.steps) version.steps = body.steps;
+      c.versions = c.versions || [];
+      c.versions.push(version);
+      const sampleCode = `S${(c.samples || []).length + 1}`;
+      c.samples = c.samples || [];
+      c.samples.push({ code: sampleCode, version: id });
+      audit(c, { name: body.actor || 'Facilitator', kind: 'human' }, 'court-version-added', { version: id, sampleCode, author });
+      save(data);
+      const expected = (c.readers?.length || 0) * c.samples.length;
+      return send(res, 201, { caseId: c.id, version, sampleCode, samples: c.samples.map((s) => ({ code: s.code })), ratingsExpected: expected });
+    }
+    if (url.pathname === '/api/court/adopt' && req.method === 'POST') {
+      const body = await readBody(req);
+      if (body.actorKind !== 'human') return send(res, 400, { error: 'Only a human may adopt a canonical version.' });
+      const c = getCase(data, body.caseId);
+      if (!c || c.workflow !== 'COURT') return send(res, 404, { error: 'COURT case not found' });
+      try {
+        const adoption = adoptCanonical(c, body.version || null, { name: body.actor || 'Mara (owner)', kind: 'human' });
+        save(data);
+        return send(res, 200, { caseId: c.id, canonicalVersion: c.canonicalVersion, adoption });
+      } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
     }
     if (url.pathname === '/api/court/tally' && req.method === 'POST') {
       const body = await readBody(req);
@@ -379,6 +467,38 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/switch/rooms' && req.method === 'GET') {
       if (realSwitch) return send(res, 200, await callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'list_rooms', {}));
       return send(res, 200, stubCallOp(stub, 'list_rooms'));
+    }
+    // --- API: Switch room timeline for the drawer (M21, 2026-11-06) ---
+    // Real mode: the live Switch room timeline via read_context — the
+    // drawer used to show only app-stored messages, so a room with real
+    // history looked empty. Stub mode: the app-stored transcript.
+    // Stored messages whose event id is already in the live timeline are
+    // the same message (posted through the app) and are deduped; stored
+    // messages with no live counterpart are kept, flagged localOnly, so
+    // nothing the app recorded is lost from the drawer.
+    if (url.pathname === '/api/switch/messages' && req.method === 'GET') {
+      const c = getCase(data, url.searchParams.get('caseId') || '');
+      if (!c) return send(res, 404, { error: 'case not found' });
+      const stored = (c.messages || []).map((m) => ({ ...m }));
+      if (!realSwitch) return send(res, 200, { messages: stored, live: false, simulated: true });
+      try {
+        const roomId = await ensureRealRoom(c);
+        const result = await withRoomConnection(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, roomId, async (connectionId) => {
+          return callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'read_context', {}, connectionId);
+        });
+        const live = switchTimelineToMessages(result);
+        const liveIds = new Set(live.map((m) => m.eventId));
+        const localOnly = stored.filter((m) => !m.eventId || !liveIds.has(m.eventId)).map((m) => ({ ...m, localOnly: true }));
+        // Undated messages sort last, never first.
+        const messages = [...live, ...localOnly].sort((a, b) => {
+          if (!a.at) return 1;
+          if (!b.at) return -1;
+          return a.at.localeCompare(b.at);
+        });
+        return send(res, 200, { messages, live: true, roomId });
+      } catch (e) {
+        return send(res, 200, { messages: stored, live: false, error: `Live room timeline unavailable: ${String(e.message || e).slice(0, 200)}` });
+      }
     }
     if (url.pathname === '/api/switch/post' && req.method === 'POST') {
       const body = await readBody(req);

@@ -40,6 +40,17 @@ export function transitionCase(c, to, actor) {
   const from = c.state;
   c.state = to;
   if (to === 'APPROVED') c.approval = { ...c.pendingApproval, approvedBy: actor.name, approvedAt: new Date().toISOString() };
+  // M20 (remediation 2026-11-06): a rejection must keep a record of
+  // WHICH terms were rejected — pendingApproval is cleared below, so
+  // without this the rejected terms vanish from every surface. The
+  // record is cleared when a fresh proposal is submitted (new pending
+  // approval supersedes it) or when a later approval lands.
+  let rejectedTerms = null;
+  if (to === 'REJECTED' && c.pendingApproval) {
+    rejectedTerms = c.pendingApproval.terms || '';
+    c.rejectedTerms = { ...c.pendingApproval, rejectedBy: actor.name, rejectedAt: new Date().toISOString() };
+  }
+  if (to === 'APPROVED' || to === 'AWAITING_APPROVAL') c.rejectedTerms = null;
   // A pending approval is resolved by leaving AWAITING_APPROVAL for any
   // other state: APPROVED/REJECTED decide it, and stepping back to
   // DISCUSSION reopens the proposal, so nothing is pending any more.
@@ -50,7 +61,7 @@ export function transitionCase(c, to, actor) {
   // a decision was still awaited on a case that was already decided or
   // sent back for discussion (QA 2026-11-06, P0 C3).
   if (to !== 'AWAITING_APPROVAL') c.pendingApproval = null;
-  audit(c, actor, `state:${from}->${to}`);
+  audit(c, actor, `state:${from}->${to}`, rejectedTerms ? { rejectedTerms } : {});
   return c;
 }
 
@@ -157,6 +168,43 @@ export function courtConflicts(versions) {
   });
 }
 
+// ---------- COURT: canonical adoption ----------
+// Adopting the canonical version is the decision step of the COURT
+// workflow (remediation H12, 2026-11-06). Human-only, tally-complete
+// only, recorded in the audit like HAGGLE's approval. Dissent is
+// preserved: the losing versions stay on the record (they are never
+// deleted, and the adoption record carries every version's mean).
+export function adoptCanonical(c, versionId, actor) {
+  if (actor?.kind !== 'human') {
+    throw new Error('Only a human may adopt a canonical version. Agents propose; humans decide.');
+  }
+  const expected = (c.readers?.length || 0) * (c.samples?.length || 0);
+  const complete = expected > 0 && (c.ratings || []).length >= expected;
+  if (!complete) {
+    throw new Error('The tally is not complete — every reader must rate every sample before a version can be adopted.');
+  }
+  if (c.canonicalVersion) {
+    throw new Error(`A canonical version is already adopted (${c.canonicalVersion}).`);
+  }
+  const tally = courtTally(c.ratings);
+  const means = {};
+  for (const s of (c.samples || [])) {
+    if (tally[s.code]) means[s.version] = tally[s.code].means.overall;
+  }
+  const version = versionId || Object.entries(means).sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (!version || !(c.versions || []).some((v) => v.id === version)) {
+    throw new Error(`Unknown version ${version}`);
+  }
+  const author = (c.versions.find((v) => v.id === version) || {}).author || version;
+  c.canonicalVersion = version;
+  c.canonicalAdoption = {
+    version, author, adoptedBy: actor.name, adoptedAt: new Date().toISOString(),
+    leaderMean: means[version], means,
+  };
+  audit(c, actor, 'court-adopted-canonical', { version, adoptedBy: actor.name });
+  return c.canonicalAdoption;
+}
+
 export function courtTally(ratings) {
   // ratings: [{reader, sampleCode, scores: {taste, texture, aroma, appearance, difficulty, overall}}]
   // Readers submit blind: scores are only revealed once every reader has submitted.
@@ -198,6 +246,34 @@ export function extractClaims(transcript) {
       evidence: [], guestChallenge: null,
     };
   }).filter((c) => c.kind === 'factual-assertion');
+}
+
+// CORRECTION claim -> evidence linkage, computed server-side from the
+// case's own evidence notes (remediation L5, 2026-11-06): the client
+// used to hardcode C1->E1, C2->E2, which broke silently if claims or
+// evidence changed. A claim cites the evidence item whose note shares
+// the most content words with the claim text (numbers included, so
+// "40 percent" matches a note saying "40%"); a claim sharing no content
+// word with any item cites nothing. Seed behaviour is unchanged:
+// C1->E1 ("survey"/"led"), C2->E2 ("40"), C3->none.
+const CLAIM_EVIDENCE_STOPWORDS = new Set(['i', 'we', 'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'was', 'is', 'are', 'were', 'be', 'been', 'by', 'with', 'not', 'that', 'this', 'it', 'its', 'as', 'at', 'from', 'there', 'still', 'am', 'my', 'me']);
+function claimTokens(text) {
+  return new Set(String(text || '').toLowerCase().replace(/%/g, ' ').split(/[^a-z0-9]+/).filter((t) => t && !CLAIM_EVIDENCE_STOPWORDS.has(t)));
+}
+export function claimEvidenceRefs(claims, evidence) {
+  const refs = {};
+  for (const cl of claims || []) {
+    const ct = claimTokens(cl.text);
+    let best = null, bestScore = 0;
+    for (const e of evidence || []) {
+      const et = claimTokens(e.note || '');
+      let score = 0;
+      for (const t of ct) if (et.has(t)) score += 1;
+      if (score > bestScore) { bestScore = score; best = e; }
+    }
+    refs[cl.id] = bestScore > 0 ? [best.id] : [];
+  }
+  return refs;
 }
 
 export function setClaimStatus(claim, status, actor) {

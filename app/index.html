@@ -18,7 +18,7 @@
       <button class="nav-item" data-view="evidence">Evidence</button>
       <button class="nav-item" data-view="decisions">Decisions</button>
       <button class="nav-item" data-view="activity">Activity</button>
-      <button class="nav-item" data-view="settings">Settings</button>
+      <button class="nav-item" data-view="settings">Environment</button>
     </nav>
     <div class="sidebar-foot">
       <p class="switch-state"><span class="dot dot-amber" aria-hidden="true"></span><span id="sidebar-switch">Switch: checking…</span></p>
@@ -35,15 +35,17 @@
           <input id="search" type="search" placeholder="Search cases, evidence…  ⌘K" autocomplete="off">
         </label>
         <span class="switch-pill" id="switch-pill" title="Simulated stub — not a live Switch connection">● SIMULATED-STUB</span>
-        <span class="user-chip" title="Signed in as the case owner">Mara · Owner</span>
+        <button class="ghost-btn btn-sm" id="switch-recheck" hidden>Recheck connection</button>
+        <span class="user-chip" title="Demo identity — Mara (owner). No sign-in; every visitor sees the same identity">Mara · Owner</span>
       </div>
     </header>
+    <p class="switch-note" id="switch-note" hidden></p>
 
     <main id="view" class="view" tabindex="-1"></main>
 
     <footer class="app-footer">
       CONVERGE demo — fictional data. Gross profit is shown separately from net profit; rent, labour and overhead are not in this model.
-      <span id="footer-switch-note">Switch integration is a labelled simulation until a real Switch server (Console 0.40.1 / core 0.31.0) is connected.</span>
+      <span id="footer-switch-note">Switch integration is a labelled simulation until a real Switch server is connected.</span>
     </footer>
   </div>
 </div>
@@ -55,7 +57,7 @@
   <button class="nav-item" data-view="evidence">Evidence</button>
   <button class="nav-item" data-view="decisions">Decisions</button>
   <button class="nav-item" data-view="activity">Activity</button>
-  <button class="nav-item" data-view="settings">Settings</button>
+  <button class="nav-item" data-view="settings">Environment</button>
 </nav>
 
 <!-- Switch room drawer -->
@@ -69,7 +71,6 @@
     <button class="ghost-btn" id="drawer-close" aria-label="Close room"><span aria-hidden="true">✕</span></button>
   </div>
   <p class="sim-label" id="drawer-sim-label">SIMULATED — stub server, not Switch. Messages here are demo transcript only.</p>
-  <div class="mandate-box" id="drawer-mandate" hidden></div>
   <div class="room-log" id="room-log" aria-live="polite"></div>
   <form class="room-form" id="room-form">
     <label class="visually-hidden" for="room-text">Post a message to the room</label>
@@ -83,7 +84,9 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <h2 id="modal-title">Confirm approval</h2>
     <p class="modal-terms" id="modal-terms"></p>
-    <p class="modal-note">This records a human approval in the audit trail. Agents propose; only a human may approve.</p>
+    <p class="modal-impact" id="modal-impact"></p>
+    <p class="modal-recommendation" id="modal-recommendation"></p>
+    <p class="modal-note" id="modal-note">This records a human approval in the audit trail. Agents propose; only a human may approve.</p>
     <div class="modal-actions">
       <button class="ghost-btn" id="modal-cancel">Cancel</button>
       <button class="btn" id="modal-confirm">Approve these terms</button>

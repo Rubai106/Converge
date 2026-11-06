@@ -7,9 +7,20 @@ const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const money = (n) => '$' + Number(n).toFixed(2);
+// A signed delta: '+$0.48' for a cost, '-$0.06' for a saving. money()
+// alone prints '$-0.06' for a negative, so prefixing '+' gave the double
+// sign '+$-0.06' in the approval modal (2026-11-06). Zero reads '+$0.00'.
+const signedMoney = (n) => (Number(n) < 0 ? '-' : '+') + '$' + Math.abs(Number(n)).toFixed(2);
+// Same for a percent delta: '+50%' / '-5%' (never '+-5%').
+const signedPct = (n) => (Number(n) < 0 ? '' : '+') + Number(n);
 const pct = (n) => Number(n).toFixed(2) + '%';
 const fmtTime = (iso) => { try { return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); } catch { return '—'; } };
 const fmtDateTime = (iso) => { try { return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return '—'; } };
+// Accent-insensitive matching (H2): "ragu" must match "ragù".
+// NFD splits accented letters into base + combining mark; stripping the
+// marks makes the comparison diacritic-blind in both directions.
+const norm = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const matchesQuery = (text, q) => !q || norm(text).includes(q);
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -27,9 +38,25 @@ const TRANSITIONS = {
   APPROVED: ['COMPLETED', 'BLOCKED'], COMPLETED: [],
   REJECTED: ['DISCUSSION', 'CANCELLED'], BLOCKED: ['INTAKE', 'INVESTIGATING', 'DISCUSSION', 'CANCELLED'], CANCELLED: [],
 };
-const STEPS = ['Draft', 'Investigating', 'Discussion', 'Proposal', 'Awaiting approval', 'Approved'];
-const STEP_INDEX = { DRAFT: 0, INTAKE: 0, INVESTIGATING: 1, DISCUSSION: 2, PROPOSAL: 3, AWAITING_APPROVAL: 4, APPROVED: 5, COMPLETED: 5 };
+const STEPS = ['Draft', 'Investigating', 'Discussion', 'Proposal', 'Awaiting approval', 'Approved', 'Completed'];
+const STEP_INDEX = { DRAFT: 0, INTAKE: 0, INVESTIGATING: 1, DISCUSSION: 2, PROPOSAL: 3, AWAITING_APPROVAL: 4, APPROVED: 5, COMPLETED: 6 };
 const TERMINAL_NEG = ['REJECTED', 'BLOCKED', 'CANCELLED'];
+
+// H8 (remediation 2026-11-06): APPROVED and REJECTED are never offered
+// The Move dropdown is for plain state moves only — it never offers a
+// state the UI cannot reach honestly. APPROVED/REJECTED go through the
+// approval modal / reject confirmation, which restate the terms. And
+// AWAITING_APPROVAL is entered ONLY by submitting a proposal — the
+// "Submit for approval" action on the selected strategy (GAP-2) or the
+// modal's re-route when the owner changes strategy at approve time —
+// which attach the proposal (proposalId + terms): the dropdown sends no
+// proposal, so offering it stranded the case in AWAITING_APPROVAL with
+// no pending approval and no Approve/Reject buttons (GAP-1, 2026-11-06).
+// The server gate (human-kind + pending-exists) is unchanged; this is
+// the UX path. Pure, so the static tests can exercise it directly.
+function moveOptions(state) {
+  return (TRANSITIONS[state] || []).filter((t) => t !== 'APPROVED' && t !== 'REJECTED' && t !== 'AWAITING_APPROVAL');
+}
 
 // HAGGLE strategy -> approval terms. Terms text is the exact wording the
 // owner signs; the price/duration come from the strategy data itself.
@@ -41,7 +68,48 @@ const STRATEGY_TERMS = {
   'gradual': { short: '$0.20 / fl oz · review 4 wks', full: '$0.20/fl oz now, reviewed in 4 weeks (owner\u2019s max approved price)' },
   'substitute': { short: 'Trial blend · one dish', full: 'Trial of a lower-cost cream blend on one dish only, with a blind taste test before any menu change' },
 };
-const PROPOSAL_TO_STRATEGY = { P1: 'freeze', P2: 'counter-019' };
+const PROPOSAL_TO_STRATEGY = { P1: 'freeze', P2: 'counter-019', P3: 'volume-021', P4: 'alternative-018', P5: 'gradual', P6: 'substitute' };
+// GAP-2 (2026-11-06): proposal IDs are P-numbers, positional in the
+// engine's strategy order (haggleStrategies: freeze, counter-019,
+// volume-021, alternative-018, gradual, substitute). P1/P2 are the
+// seeded proposals (HAG-014's approval is P2); P3–P6 extend the same
+// convention so every strategy can be submitted for approval. The
+// server validates a submitted proposalId positionally against the
+// case's own strategies. STRATEGY_TO_PROPOSAL is the inverse, used by
+// the Submit for approval action and the modal's re-route so both send
+// the same canonical id — the modal used to send the strategy id,
+// which broke the PROPOSAL_TO_STRATEGY lookup and the approved-impact
+// panel (approvedStrategy returned null for it).
+const STRATEGY_TO_PROPOSAL = Object.fromEntries(Object.entries(PROPOSAL_TO_STRATEGY).map(([pid, sid]) => [sid, pid]));
+// Canonical proposalId for a strategy, or null for an unknown id.
+// Pure, so the static tests can exercise it directly.
+function proposalIdForStrategy(strategyId) { return STRATEGY_TO_PROPOSAL[strategyId] || null; }
+// Exact terms text for a strategy (the wording the owner signs).
+// Pure; the fallback matches the inline lookups it replaces.
+function termsForStrategy(s) { return STRATEGY_TERMS[s.id] || { short: money(s.unitPrice) + ' / fl oz', full: money(s.unitPrice) + '/fl oz' }; }
+
+// The strategy behind an approval (or a pending approval), from the
+// already-computed deterministic engine data — never invented numbers.
+// Returns null when the case carries no approval/pending record for a
+// known strategy (e.g. a hand-entered proposalId).
+function approvedStrategy(c) {
+  const pid = c.approval?.proposalId;
+  if (!pid) return null;
+  return (c.strategies || []).find((s) => s.id === PROPOSAL_TO_STRATEGY[pid]) || null;
+}
+// One-line financial consequence of a strategy, from engine data:
+// extra cost per serving + per month, food-cost %, and the mandate
+// check against the owner's max approved price. Shared by the approval
+// modal (H7) and the reject confirmation (H10) so both restate the
+// same figures the impact panel shows.
+function strategyImpactLine(c, s) {
+  const a = c.analysis;
+  const perServing = s.creamCostPerServing - a.oldCreamCostPerServing;
+  const mandate = s.unitPrice <= c.input.maxApprovedPrice
+    ? `within mandate max ${money(c.input.maxApprovedPrice)}`
+    : `above mandate max ${money(c.input.maxApprovedPrice)}`;
+  return `${signedMoney(perServing)} / serving · ${signedMoney(s.extraVsOldPerMonth)} / month · food cost ${pct(s.foodCostPct)} (target ${c.input.targetFoodCostPct}%) · ${mandate}`;
+}
 
 // COURT blind scores — FALLBACK only. The server now holds the ratings
 // (GET /api/cases/CRT-007 returns ratings + tally; POST /api/court/rate
@@ -57,20 +125,38 @@ const COURT_DEMO = {
   readers: ['Reader A', 'Reader B', 'Reader C'],
   scores: {},
 };
-// CORRECTION claim -> evidence mapping, derived from the seeded evidence notes:
-// E1 (co-led survey) bears on the "I led" claim; E2 (paper says 38%) on the "40%" claim.
-const CLAIM_EVIDENCE = { C1: ['E1'], C2: ['E2'], C3: [] };
-
 // ---------- state ----------
+// A case is a QA copy when its id ends in -QA or its title says so
+// (qa-seed.mjs clones). QA copies are the same negotiation/case run a
+// second time for testing — headline metrics must not count them twice
+// (remediation M4, 2026-11-06).
+function isQaCopy(c) { return /-QA$/.test(c.id || '') || /QA copy/i.test(c.title || ''); }
+function prettyState(s) { const t = String(s || '').replace(/_/g, ' ').toLowerCase(); return t ? t[0].toUpperCase() + t.slice(1) : '—'; }
+function switchVersionText() {
+  const v = statusData?.switchVersion;
+  return v ? { console: v.console, core: v.core } : null;
+}
 let statusData = null;
 let cases = [];
 let details = {};
 let view = 'overview';
 let currentCaseId = null;
 let currentTab = 'overview';
+// NEW-1 (2026-11-06): a deep link to a case created after boot used to
+// silently keep showing the previously selected case — applyRoute
+// returned false when the client's details cache lacked the case, and
+// the hashchange handler then did nothing. A case route now resolves
+// on demand: while its detail is being fetched (or the fetch failed)
+// routeState carries the pending/error state and render() shows a
+// loading / error panel instead of stale content. routeSeq discards
+// fetches superseded by a newer navigation (Back/forward races).
+let routeState = null; // { id, tab, status: 'loading' | 'error', kind, message }
+let routeSeq = 0;
 let selectedStrategy = null;
 let courtSample = 'S1';
 let evidenceFilter = 'All';
+let casesStatusFilter = 'All';
+let activityCaseFilter = 'All';
 let searchQuery = '';
 let roomCaseId = null;
 let claimLocal = {}; // caseId -> claimId -> {status, challenge:{text, evidence, by}}
@@ -142,7 +228,7 @@ function counterparty(c) {
 }
 function isActive(c) { return !['COMPLETED', 'REJECTED', 'CANCELLED'].includes(c.state); }
 function statePill(state) {
-  const cls = { AWAITING_APPROVAL: 'pill-amber', APPROVED: 'pill-teal', COMPLETED: 'pill-teal', REJECTED: 'pill-red', BLOCKED: 'pill-red', CANCELLED: 'pill-grey' }[state] || 'pill-grey';
+  const cls = { AWAITING_APPROVAL: 'pill-amber', APPROVED: 'pill-teal', COMPLETED: 'pill-blue', REJECTED: 'pill-red', BLOCKED: 'pill-red', CANCELLED: 'pill-grey' }[state] || 'pill-grey';
   return `<span class="pill ${cls}">${esc(state.replace(/_/g, ' '))}</span>`;
 }
 function courtScoresFor(c) {
@@ -169,6 +255,31 @@ function getClaim(c, claim) {
   const local = (claimLocal[c.id] || {})[claim.id] || {};
   return { ...claim, challenge: local.challenge || claim.guestChallenge || null };
 }
+// Pure helpers (remediation H11/L8) — no DOM, no fetch, so the static
+// tests can extract and exercise them directly.
+// parseVersionIngredients: "salt: a pinch\nfat: lard" -> {salt:'a pinch', fat:'lard'}.
+// Lines without a colon, or with an empty key/value, are skipped.
+function parseVersionIngredients(text) {
+  const out = {};
+  for (const line of String(text || '').split(/\n/)) {
+    const i = line.indexOf(':');
+    if (i <= 0) continue;
+    const k = line.slice(0, i).trim();
+    const v = line.slice(i + 1).trim();
+    if (k && v) out[k] = v;
+  }
+  return out;
+}
+// validateRatingScores: first offending dimension, or null when valid.
+// Scores must be whole numbers 1-5 (L8); the server 400 stays the backstop.
+const RATING_DIMS = ['taste', 'texture', 'aroma', 'appearance', 'difficulty', 'overall'];
+function validateRatingScores(scores) {
+  for (const d of RATING_DIMS) {
+    const v = scores ? scores[d] : undefined;
+    if (!Number.isInteger(v) || v < 1 || v > 5) return `${d} must be a whole number from 1 to 5.`;
+  }
+  return null;
+}
 async function reloadCase(c) { details[c.id] = await api(`/api/cases/${c.id}`); }
 
 // ---------- data loading ----------
@@ -188,12 +299,14 @@ function renderSwitchStatus() {
   // now, so an unreachable server shows SWITCH-UNREACHABLE here instead
   // of a false LIVE. Nothing in this function may claim "live" unless
   // the health probe succeeded.
-  const text = `${mode} — Console 0.40.1 / core 0.31.0`;
+  const ver = switchVersionText();
+  const verText = ver ? `Console ${ver.console} / core ${ver.core}` : 'Console — / core —';
+  const text = `${mode} — ${verText}`;
   $('#sidebar-switch').textContent = 'Switch: ' + text;
   const pill = $('#switch-pill');
   pill.textContent = '● ' + mode;
   pill.title = live
-    ? 'Live Switch server (core 0.31.0) — rooms are real Mattermost channels via the Switch bridge.'
+    ? `Live Switch server (core ${ver?.core || '—'}) — rooms are real Mattermost channels via the Switch bridge.`
     : unreachable
     ? 'Switch is configured but the server did not answer the health probe. Rooms and messages are NOT live right now.'
     : 'Simulated stub — not a live Switch connection. No real Mattermost room yet.';
@@ -210,37 +323,197 @@ function renderSwitchStatus() {
   const footerNote = $('#footer-switch-note');
   if (footerNote) {
     footerNote.textContent = live
-      ? 'Switch integration is LIVE — real switch-core 0.31.0 + Mattermost via the Switch bridge (see docs/switch-live-integration.md).'
+      ? `Switch integration is LIVE — real switch-core ${ver?.core || '—'} + Mattermost via the Switch bridge (see docs/switch-live-integration.md).`
       : unreachable
       ? 'Switch integration is configured but the server is currently unreachable — the pill above shows SWITCH-UNREACHABLE until the health probe succeeds.'
-      : 'Switch integration is a labelled simulation until a real Switch server (Console 0.40.1 / core 0.31.0) is connected.';
+      : `Switch integration is a labelled simulation until a real Switch server (${verText}) is connected.`;
+  }
+  // H6: recovery controls appear only while unreachable.
+  const recheck = $('#switch-recheck');
+  if (recheck) recheck.hidden = !unreachable;
+  const note = $('#switch-note');
+  if (note) {
+    note.hidden = !unreachable;
+    if (unreachable) note.textContent = 'Switch is unreachable — local case data and decisions still work; rooms and messages are unavailable until the connection recovers.';
   }
 }
 
-// ---------- shell ----------
-function setView(v) {
-  view = v; currentCaseId = null; currentTab = 'overview';
-  history.replaceState(null, '', location.pathname);
+// ---------- shell: hash routing (H5) ----------
+// Deep links are hash routes: #/cases, #/workflows, #/case/HAG-014 and
+// #/case/HAG-014?tab=audit. The hash is the single source of truth for
+// the view, so refresh, bookmark and Back all preserve it; the server
+// still serves the SPA shell at / and /app/* only (no server change —
+// the /cases path 404 is the old non-hash URL, not a deep link).
+// NEW-1 (2026-11-06): a case route whose detail is not in the client
+// cache (case created after boot) is fetched on demand by
+// resolveCaseRoute instead of being dropped — the hash is still the
+// source of truth, the server is the source of the detail.
+const VIEWS = ['overview', 'cases', 'workflows', 'evidence', 'decisions', 'activity', 'settings', 'create'];
+const CASE_TABS = ['overview', 'analysis', 'negotiation', 'evidence', 'audit'];
+function hashFor(v, caseId, tab) {
+  if (caseId) return `#/case/${encodeURIComponent(caseId)}${tab && tab !== 'overview' ? `?tab=${tab}` : ''}`;
+  return `#/${v}`;
+}
+function parseHash() {
+  const raw = location.hash.replace(/^#/, '');
+  const [path, query] = raw.split('?');
+  const parts = path.split('/').filter(Boolean);
+  const params = new URLSearchParams(query || '');
+  if (parts[0] === 'case' && parts[1]) {
+    const tab = params.get('tab');
+    return { caseId: decodeURIComponent(parts[1]), tab: CASE_TABS.includes(tab) ? tab : 'overview' };
+  }
+  if (parts.length === 1 && VIEWS.includes(parts[0])) return { view: parts[0] };
+  if (!parts.length) return { view: 'overview' };
+  return null;
+}
+// Resolve a case route, fetching the detail from the server when the
+// client cache misses (case created after boot, or a bookmark/refresh
+// in a stale tab). Never silently shows the wrong case: while the
+// fetch is in flight the view is a loading panel; a 404 becomes a
+// "case not found" panel; any other failure becomes an error panel
+// with a retry button. A superseded fetch (Back/forward during the
+// request) is discarded via routeSeq.
+async function resolveCaseRoute(id, tab) {
+  const seq = ++routeSeq;
+  // GAP-2 staleness: the selected strategy is per-case — reset it when
+  // opening a different case so the Submit button always submits the
+  // strategy this case shows selected (its own approval/pending/default),
+  // never a leftover selection from the previous case.
+  if (id !== currentCaseId) selectedStrategy = null;
+  currentCaseId = id; currentTab = tab || 'overview';
+  $$('.nav-item').forEach((b) => { b.classList.remove('is-active'); b.removeAttribute('aria-current'); });
+  if (details[id]) { routeState = null; render(); $('#view').focus({ preventScroll: true }); return true; }
+  routeState = { id, tab: currentTab, status: 'loading' };
+  render();
+  $('#view').focus({ preventScroll: true });
+  try {
+    const d = await api(`/api/cases/${encodeURIComponent(id)}`);
+    if (seq !== routeSeq) return true; // superseded by a newer navigation
+    details[id] = d;
+    if (!cases.some((c) => c.id === id)) {
+      cases.push(d);
+      $('#nav-case-count').textContent = String(cases.filter(isActive).length);
+    }
+    routeState = null;
+    render();
+    $('#view').focus({ preventScroll: true });
+  } catch (e) {
+    if (seq !== routeSeq) return true;
+    const notFound = /not found/i.test(e.message || '');
+    routeState = { id, tab: currentTab, status: 'error', kind: notFound ? 'not-found' : 'load', message: notFound ? '' : (e.message || 'Request failed') };
+    render();
+    $('#view').focus({ preventScroll: true });
+  }
+  return true;
+}
+function renderRouteState() {
+  // Loading / error panel for a case route whose detail is not in the
+  // client cache yet. Rendered instead of any case content, so stale
+  // content is never presented as the requested case.
+  setBreadcrumb('');
+  const s = routeState;
+  if (s.status === 'loading') {
+    $('#view').innerHTML = `<section class="panel" role="status"><h1>Loading case…</h1><p>Fetching <span class="num">${esc(s.id)}</span>…</p></section>`;
+    return;
+  }
+  if (s.kind === 'not-found') {
+    $('#view').innerHTML = `<section class="panel"><h1>Case not found</h1><p>No case with ID <span class="num">${esc(s.id)}</span> exists. It may have been deleted, or the link may be wrong.</p><p><button class="btn" id="route-back">← All cases</button></p></section>`;
+  } else {
+    $('#view').innerHTML = `<section class="panel"><h1>Could not load case</h1><p>Fetching <span class="num">${esc(s.id)}</span> failed: ${esc(s.message)}.</p><p><button class="btn" id="route-retry">Retry</button> <button class="ghost-btn" id="route-back">← All cases</button></p></section>`;
+    $('#route-retry').addEventListener('click', () => resolveCaseRoute(s.id, s.tab));
+  }
+  $('#route-back').addEventListener('click', () => setView('cases'));
+}
+async function applyRoute(route) {
+  if (!route) return false;
+  if (route.caseId) return resolveCaseRoute(route.caseId, route.tab || 'overview');
+  routeState = null; view = route.view; currentCaseId = null; currentTab = 'overview';
   $$('.nav-item').forEach((b) => {
-    const on = b.dataset.view === v;
+    const on = b.dataset.view === view;
     b.classList.toggle('is-active', on);
     if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
   render();
   $('#view').focus({ preventScroll: true });
+  return true;
+}
+function setView(v) {
+  const target = hashFor(v, null, null);
+  if (location.hash === target) {
+    // Already on this route (e.g. re-clicking the active nav item):
+    // render directly instead of waiting for a hashchange that won't fire.
+    view = v; currentCaseId = null; currentTab = 'overview';
+    $$('.nav-item').forEach((b) => {
+      const on = b.dataset.view === v;
+      b.classList.toggle('is-active', on);
+      if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
+    render();
+    $('#view').focus({ preventScroll: true });
+    return;
+  }
+  // State is applied by the hashchange handler — do not pre-set view
+  // here, or its "already on this route" guard would swallow the event.
+  location.hash = target;
 }
 function openCase(id, tab = 'overview') {
-  currentCaseId = id; currentTab = tab;
-  history.replaceState(null, '', `?case=${encodeURIComponent(id)}`);
-  $$('.nav-item').forEach((b) => { b.classList.remove('is-active'); b.removeAttribute('aria-current'); });
-  render();
-  $('#view').focus({ preventScroll: true });
+  // NEW-1: never bail silently on a cache miss — navigating sets the
+  // hash and resolveCaseRoute fetches the detail on demand.
+  const target = hashFor(null, id, tab);
+  if (location.hash === target) {
+    resolveCaseRoute(id, tab);
+    return;
+  }
+  location.hash = target; // hashchange -> applyRoute
 }
 function backToDashboard() { setView('overview'); }
-function setBreadcrumb(html) { $('#breadcrumb').innerHTML = html; }
+function setBreadcrumb(html) {
+  const el = $('#breadcrumb');
+  el.innerHTML = html;
+  el.hidden = !html; // M1: no breadcrumb at all when it would duplicate the H1
+}
+// Keep the hash in step with in-place tab changes (replaceState: no new
+// history entry — the tab is part of the case view, not a new page).
+function syncCaseHash() {
+  if (!currentCaseId) return;
+  history.replaceState(null, '', hashFor(null, currentCaseId, currentTab));
+}
+window.addEventListener('hashchange', () => {
+  const route = parseHash();
+  if (!route) return;
+  // Ignore the event when the hash already matches current state
+  // (e.g. a tab sync that only changed the query).
+  if (route.caseId) {
+    if (route.caseId === currentCaseId && (route.tab || 'overview') === currentTab) return;
+  } else if (!currentCaseId && route.view === view) return;
+  applyRoute(route);
+});
+
+// ---------- Switch status + re-probe (H6) ----------
+// When Switch is unreachable there is a "Recheck connection" button
+// beside the pill and a line under the topbar stating what still works
+// (local case data and decisions) vs what doesn't (rooms/messages).
+// Recovery no longer silently requires a full reload.
+async function recheckSwitch() {
+  const btn = $('#switch-recheck');
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  try {
+    statusData = await api('/api/status');
+    renderSwitchStatus();
+    render();
+  } catch (e) {
+    renderSwitchStatus();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Recheck connection'; }
+  }
+}
 
 function render() {
   if (currentCaseId && details[currentCaseId]) { renderCase(); return; }
+  // NEW-1: a case route whose detail is loading or failed to load
+  // shows its own panel — never the dashboard, never a stale case.
+  if (currentCaseId && routeState && routeState.id === currentCaseId) { renderRouteState(); return; }
   if (currentCaseId) { currentCaseId = null; }
   ({ overview: renderDashboard, cases: renderCasesView, workflows: renderWorkflows,
      evidence: renderEvidenceView, decisions: renderDecisionsView, create: renderCreateWizard,
@@ -249,40 +522,65 @@ function render() {
 
 // ---------- dashboard ----------
 function kpiData() {
-  const active = cases.filter(isActive).length;
-  const awaiting = cases.filter((c) => c.state === 'AWAITING_APPROVAL').length;
-  const extraMonth = Object.values(details)
+  // M4: QA copies are excluded from every headline metric — HAG-QA is
+  // a test copy of the HAG-014 negotiation, so counting it would double
+  // the extra cost ($76.80 -> $153.60) and inflate the case counts.
+  const real = cases.filter((c) => !isQaCopy(c));
+  const realDetails = Object.values(details).filter((d) => !isQaCopy(d));
+  const active = real.filter(isActive).length;
+  const awaiting = real.filter((c) => c.state === 'AWAITING_APPROVAL').length;
+  const extraMonth = realDetails
     .filter((d) => d.workflow === 'HAGGLE' && d.analysis)
     .reduce((s, d) => s + d.analysis.monthlyExtraCost, 0);
   const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
   const decided = new Set();
-  for (const d of Object.values(details)) {
+  for (const d of realDetails) {
     if (d.approval?.approvedAt && new Date(d.approval.approvedAt).getTime() >= weekAgo) decided.add(d.id);
     for (const a of (d.audit || [])) {
       if (/->APPROVED$/.test(a.event) && new Date(a.at).getTime() >= weekAgo) decided.add(d.id);
     }
   }
-  return { active, awaiting, extraMonth, decided: decided.size };
+  return { active, awaiting, extraMonth, decided: decided.size, qaExcluded: cases.length - real.length };
 }
 function filteredCases() {
-  const q = searchQuery.trim().toLowerCase();
+  const q = norm(searchQuery.trim());
   if (!q) return cases;
-  return cases.filter((c) => [c.id, c.title, c.workflow, counterparty(c), c.state].join(' ').toLowerCase().includes(q));
+  return cases.filter((c) => matchesQuery([c.id, c.title, c.workflow, counterparty(c), c.state].join(' '), q));
+}
+// The dashboard search filters every panel on the page (H2), not just
+// the table: the attention list and the activity feed use the same
+// normalised query, so the "Filtered by …" caption never contradicts
+// a panel below it.
+function filteredNeeds() {
+  const q = norm(searchQuery.trim());
+  return cases.filter((c) => (c.state === 'AWAITING_APPROVAL' || c.state === 'DISCUSSION')
+    && matchesQuery([c.id, c.title, c.state].join(' '), q));
+}
+function filteredActivity() {
+  const q = norm(searchQuery.trim());
+  return activityFeed().filter((a) => matchesQuery(a.text, q));
 }
 function casesTableRows(list) {
   return list.map((c) => {
     const d = details[c.id] || c;
     const impact = d.workflow === 'HAGGLE' && d.analysis ? money(d.analysis.monthlyExtraCost) + '/mo' : '—';
-    const updated = (d.audit && d.audit.length) ? fmtTime(d.audit[d.audit.length - 1].at) : '—';
     const owner = (d.participants || []).find((p) => p.role === 'owner' || p.role === 'host')?.name || '—';
-    return `<tr class="clickable" data-open="${esc(c.id)}" tabindex="0">
+    // UPDATED column dropped (M5): no created/seeded timestamp exists in
+    // the data model, so the column showed "—" for every seeded row and
+    // only filled after a transition. Inventing a time would fabricate
+    // provenance; the audit trail on each case carries real timestamps.
+    // L2: clickable rows expose their action to assistive tech.
+    return `<tr class="clickable" data-open="${esc(c.id)}" tabindex="0" role="button" aria-label="Open case ${esc(c.id)} — ${esc(c.title)}">
       <td><span class="num">${esc(c.id)}</span><br><span class="muted small">${esc(c.title)}</span></td>
       <td>${esc(c.workflow)}</td><td>${esc(counterparty(c))}</td>
       <td class="num">${impact}</td><td>${statePill(c.state)}</td>
-      <td>${esc(owner)}</td><td class="num">${updated}</td></tr>`;
+      <td class="col-owner">${esc(owner)}</td></tr>`;
   }).join('');
 }
 function bindCaseRows(root) {
+  // Case links (data-case anchors rendered inside feed/decisions text)
+  // open in place instead of reloading the page.
+  $$('a[data-case]', root).forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openCase(a.dataset.case); }));
   $$('[data-open]', root).forEach((row) => {
     // Rows are keyboard-operable: the Enter/Space handler below only
     // fires when the row can receive focus (QA 2026-11-06 — Workflows
@@ -293,82 +591,129 @@ function bindCaseRows(root) {
   });
 }
 function renderDashboard() {
-  setBreadcrumb('Overview');
+  // M1: the breadcrumb duplicated the H1 ("Overview" twice). Top-level
+  // views carry no breadcrumb; the case workspace keeps its "Cases / …"
+  // parent crumb, which does not duplicate its H1.
+  setBreadcrumb('');
   const k = kpiData();
-  const needs = cases.filter((c) => c.state === 'AWAITING_APPROVAL' || c.state === 'DISCUSSION');
-  const activity = activityFeed().slice(0, 6);
+  const needs = filteredNeeds();
+  const awaiting = needs.filter((c) => c.state === 'AWAITING_APPROVAL');
+  const discussing = needs.filter((c) => c.state === 'DISCUSSION');
+  const activity = filteredActivity().slice(0, 6);
+  const needsRows = (list) => list.map((c) => {
+    const d = details[c.id] || c;
+    const need = c.state === 'AWAITING_APPROVAL'
+      ? `Approve ${esc(d.pendingApproval?.terms || 'pending terms')}`
+      : 'Discussion open — review the versions and vote';
+    return `<div class="decision-row"><div><div class="dr-title"><span class="num">${esc(c.id)}</span> — ${esc(c.title)}</div>
+      <div class="dr-sub">${need}</div></div>
+      <button class="ghost-btn btn-sm" data-open="${esc(c.id)}">${c.state === 'AWAITING_APPROVAL' ? 'Review &amp; approve' : 'Open'}</button></div>`;
+  }).join('');
   $('#view').innerHTML = `
     <h1 class="section-title">Overview</h1>
     <p class="section-sub">One shared decision engine across HAGGLE, COURT and CORRECTION. Humans approve; agents propose, calculate and investigate.</p>
     <p><button class="btn" id="new-case-btn">+ New supplier case</button></p>
     <div class="kpis" role="group" aria-label="Key figures">
-      <div class="kpi"><small>Active cases</small><b>${k.active}</b><div class="kpi-note">${cases.length} total cases</div></div>
+      <div class="kpi"><small>Active cases</small><b>${k.active}</b><div class="kpi-note">${cases.length} total cases${k.qaExcluded ? ` · ${k.qaExcluded} QA ${k.qaExcluded === 1 ? 'copy' : 'copies'} excluded` : ''}</div></div>
       <div class="kpi"><small>Awaiting approval</small><b>${k.awaiting}</b><div class="kpi-note">human decision required</div></div>
-      <div class="kpi"><small>Extra cost this month</small><b>${money(k.extraMonth)}</b><div class="kpi-note">HAGGLE cases, deterministic</div></div>
+      <div class="kpi"><small>Extra cost this month</small><b>${money(k.extraMonth)}</b><div class="kpi-note">HAGGLE cases, deterministic${k.qaExcluded ? ' · QA copies excluded' : ''}</div></div>
       <div class="kpi"><small>Decisions this week</small><b>${k.decided}</b><div class="kpi-note">approved in the last 7 days</div></div>
     </div>
+    <section class="panel" aria-labelledby="needs-h">
+      <h2 id="needs-h">Needs your attention</h2>
+      ${needs.length ? `
+        ${awaiting.length ? `<h3>Awaiting your approval</h3>${needsRows(awaiting)}` : ''}
+        ${discussing.length ? `<h3>Open discussions</h3>${needsRows(discussing)}` : ''}`
+        : `<p class="empty">${searchQuery ? `No attention items match “${esc(searchQuery)}”.` : 'Nothing needs a human decision right now.'}</p>`}
+    </section>
     <section class="panel" aria-labelledby="cases-h">
       <h2 id="cases-h">All cases</h2>
       <div class="table-wrap"><table>
-        <caption>${searchQuery ? `Filtered by “${esc(searchQuery)}” — ` : ''}Click a row to open the case workspace.</caption>
+        <caption>${searchQuery ? `Filtered by “${esc(searchQuery)}” — cases, attention items and activity on this page.` : 'Click a row to open the case workspace.'}</caption>
         <thead><tr><th scope="col">Case</th><th scope="col">Workflow</th><th scope="col">Counterparty</th>
-        <th scope="col" class="num">Impact</th><th scope="col">Stage</th><th scope="col">Owner</th><th scope="col" class="num">Updated</th></tr></thead>
-        <tbody>${casesTableRows(filteredCases()) || `<tr><td colspan="7" class="empty">No cases match “${esc(searchQuery)}”.</td></tr>`}</tbody>
+        <th scope="col" class="num">Impact</th><th scope="col">Stage</th><th scope="col" class="col-owner">Owner</th></tr></thead>
+        <tbody>${casesTableRows(filteredCases()) || `<tr><td colspan="6" class="empty">No cases match “${esc(searchQuery)}”.</td></tr>`}</tbody>
       </table></div>
     </section>
-    <div class="dash-lower">
-      <section class="panel" aria-labelledby="needs-h">
-        <h2 id="needs-h">Needs a decision today</h2>
-        ${needs.length ? needs.map((c) => {
-          const d = details[c.id] || c;
-          const need = c.state === 'AWAITING_APPROVAL'
-            ? `Approve ${esc(d.pendingApproval?.terms || 'pending terms')}`
-            : 'Discussion open — review the versions and vote';
-          return `<div class="decision-row"><div><div class="dr-title"><span class="num">${esc(c.id)}</span> — ${esc(c.title)}</div>
-            <div class="dr-sub">${need}</div></div>
-            <button class="ghost-btn btn-sm" data-open="${esc(c.id)}">${c.state === 'AWAITING_APPROVAL' ? 'Review &amp; approve' : 'Open'}</button></div>`;
-        }).join('') : '<p class="empty">Nothing needs a human decision today.</p>'}
-      </section>
-      <section class="panel" aria-labelledby="act-h">
-        <h2 id="act-h">Recent agent activity</h2>
-        ${activity.length ? activity.map((a) => `<div class="activity-item">${a.at ? `<span class="ai-time">${fmtTime(a.at)}</span>` : ''}${esc(a.text)}</div>`).join('') : '<p class="empty">No agent activity recorded yet in this demo session.</p>'}
-        <p class="small muted" style="margin-top:8px">Derived from case records (proposals, approvals, audit events) — not a live feed.</p>
-      </section>
-    </div>`;
+    <section class="panel" aria-labelledby="act-h">
+      <h2 id="act-h">Recent agent activity</h2>
+      ${activity.length ? activity.map((a) => `<div class="activity-item">${activityItemHtml(a)}</div>`).join('') : `<p class="empty">${searchQuery ? `No activity matches “${esc(searchQuery)}”.` : 'No agent activity recorded yet in this demo session.'}</p>`}
+      <p class="small muted" style="margin-top:8px">Derived from case records (proposals, approvals, audit events) — not a live feed.</p>
+    </section>`;
   $('#new-case-btn').addEventListener('click', openWizard);
   bindCaseRows($('#view'));
 }
 function activityFeed() {
   const items = [];
   for (const d of Object.values(details)) {
-    for (const a of (d.audit || [])) items.push({ at: a.at, text: `${a.actor} — ${a.event}` });
-    for (const p of (d.proposals || [])) items.push({ at: null, text: `${p.by} submitted ${p.kind === 'counter-offer' ? 'a counter-offer' : 'a proposal'} on ${d.id}: ${p.text}` });
-    if (d.pendingApproval) items.push({ at: null, text: `${d.pendingApproval.requestedBy} requested approval on ${d.id}: ${d.pendingApproval.terms}` });
+    for (const a of (d.audit || [])) {
+      // M6/M9: the feed used to render audit events verbatim —
+      // "Facilitator Agent — room-message" with no message text, and
+      // "Mara (owner) — state:AWAITING_APPROVAL->APPROVED" as raw enums.
+      // Room-message events now carry the message excerpt (looked up in
+      // the case's messages by event id); one with no displayable
+      // content is omitted instead of rendered as an empty row.
+      // Claim-status changes carry the claim and its new status.
+      if (a.event === 'room-message') {
+        const msg = (d.messages || []).find((m) => m.eventId === a.eventId || m.id === a.eventId || m.id === a.id);
+        if (!msg || !String(msg.text || '').trim()) continue;
+        const excerpt = msg.text.length > 160 ? msg.text.slice(0, 160) + '…' : msg.text;
+        items.push({ at: a.at, caseId: d.id, text: `${a.actor} posted in ${d.switchRoom || 'the room'} on ${d.id}: “${excerpt}”` });
+      } else if (/^state:/.test(a.event)) {
+        const m = /^state:(\w+)->(\w+)$/.exec(a.event);
+        items.push({ at: a.at, caseId: d.id, text: m ? `${a.actor} moved ${d.id} from ${prettyState(m[1])} to ${prettyState(m[2])}` : `${a.actor} — ${a.event}` });
+      } else if (a.event === 'claim-status') {
+        const claim = (d.claims || []).find((cl) => cl.id === a.claim);
+        const challenge = claim?.guestChallenge?.text ? ` — guest challenge: “${claim.guestChallenge.text}”` : '';
+        items.push({ at: a.at, caseId: d.id, text: a.claim && a.status ? `${a.actor} changed claim ${a.claim} on ${d.id} to ${a.status}${challenge}` : `${a.actor} changed a claim's status on ${d.id}` });
+      } else {
+        items.push({ at: a.at, caseId: d.id, text: `${a.actor} — ${a.event}` });
+      }
+    }
+    for (const p of (d.proposals || [])) items.push({ at: null, caseId: d.id, text: `${p.by} submitted ${p.kind === 'counter-offer' ? 'a counter-offer' : 'a proposal'} on ${d.id}: ${p.text}` });
+    if (d.pendingApproval) items.push({ at: null, caseId: d.id, text: `${d.pendingApproval.requestedBy} requested approval on ${d.id}: ${d.pendingApproval.terms}` });
   }
   return items.sort((a, b) => {
     if (a.at && b.at) return new Date(b.at) - new Date(a.at);
     return a.at ? -1 : 1;
   });
 }
+// Render a feed item's text with its case id as a real link (M9).
+function activityItemHtml(a, withTime = true) {
+  const linked = a.caseId ? esc(a.text).replace(new RegExp(esc(a.caseId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), `<a href="?case=${esc(a.caseId)}" data-case="${esc(a.caseId)}">${esc(a.caseId)}</a>`) : esc(a.text);
+  return `${withTime && a.at ? `<span class="ai-time">${fmtTime(a.at)}</span>` : ''}${linked}`;
+}
 
 // ---------- secondary views ----------
 function renderCasesView() {
-  setBreadcrumb('Active Cases');
+  setBreadcrumb('');
+  // M2: this page used to duplicate the dashboard table exactly. It
+  // now has its own value — status filter chips over the same list.
+  const chips = [['All', 'All'], ['AWAITING_APPROVAL', 'Awaiting approval'], ['DISCUSSION', 'Discussion'], ['COMPLETED', 'Completed']];
+  const list = filteredCases().filter((c) => casesStatusFilter === 'All' || c.state === casesStatusFilter);
   $('#view').innerHTML = `
     <h1 class="section-title">Active Cases</h1>
     <p class="section-sub">${cases.filter(isActive).length} active of ${cases.length} total. Click a row to open the case workspace.</p>
     <p><button class="btn" id="new-case-btn">+ New supplier case</button></p>
+    <div class="filter-row" role="group" aria-label="Filter cases by stage">
+      ${chips.map(([v, label]) => `<button class="ghost-btn btn-sm ${casesStatusFilter === v ? 'is-active' : ''}" data-cases-filter="${v}" aria-pressed="${casesStatusFilter === v}">${label}</button>`).join('')}
+    </div>
     <section class="panel"><div class="table-wrap"><table>
-      <caption>${searchQuery ? `Filtered by “${esc(searchQuery)}”.` : 'All cases in this workspace.'}</caption>
+      <caption>${list.length} case${list.length === 1 ? '' : 's'}${casesStatusFilter === 'All' ? '' : ` — stage ${prettyState(casesStatusFilter)}`}${searchQuery ? ` · filtered by “${esc(searchQuery)}”` : ''}.</caption>
       <thead><tr><th scope="col">Case</th><th scope="col">Workflow</th><th scope="col">Counterparty</th>
-      <th scope="col" class="num">Impact</th><th scope="col">Stage</th><th scope="col">Owner</th><th scope="col" class="num">Updated</th></tr></thead>
-      <tbody>${casesTableRows(filteredCases()) || `<tr><td colspan="7" class="empty">No cases match.</td></tr>`}</tbody>
+      <th scope="col" class="num">Impact</th><th scope="col">Stage</th><th scope="col" class="col-owner">Owner</th></tr></thead>
+      <tbody>${casesTableRows(list) || `<tr><td colspan="6" class="empty">No cases match.</td></tr>`}</tbody>
     </table></div></section>`;
   $('#new-case-btn').addEventListener('click', openWizard);
+  $$('[data-cases-filter]', $('#view')).forEach((b) => b.addEventListener('click', () => { casesStatusFilter = b.dataset.casesFilter; renderCasesView(); }));
   bindCaseRows($('#view'));
 }
 function renderWorkflows() {
-  setBreadcrumb('Workflows');
+  setBreadcrumb('');
+  // M7: "configurable" is dropped — no configuration exists. Each demo
+  // case is now a link to its case, and the demo case's current stage
+  // is highlighted inside its chain.
+  const stagesOf = (chain) => chain.split(' → ').map((s) => s.trim());
   const rows = [
     ['HAGGLE', 'Margin-aware supplier negotiation', 'Draft → Investigating → Discussion → Proposal → Awaiting approval → Approved → Completed', 'HAG-014', 'Negotiation Agent, Financial Analyst'],
     ['COURT', 'Blind recipe testing and adjudication', 'Intake → Investigating → Discussion → Proposal → Approved', 'CRT-007', 'Facilitator Agent'],
@@ -376,11 +721,22 @@ function renderWorkflows() {
   ];
   $('#view').innerHTML = `
     <h1 class="section-title">Workflows</h1>
-    <p class="section-sub">Three configurable workflows on one shared decision engine. Same states, same approval gate, same audit trail.</p>
+    <p class="section-sub">Three workflows on one shared decision engine. Same states, same approval gate, same audit trail.</p>
     <section class="panel"><div class="table-wrap"><table>
-      <caption>Workflow templates and their demo cases.</caption>
+      <caption>Workflow templates and their demo cases. The highlighted stage is where the demo case sits now.</caption>
       <thead><tr><th scope="col">Workflow</th><th scope="col">Purpose</th><th scope="col">Stages</th><th scope="col">Demo case</th><th scope="col">Agents</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr class="clickable" data-open="${r[3]}"><td><strong>${r[0]}</strong></td><td>${r[1]}</td><td>${r[2]}</td><td class="num">${r[3]}</td><td>${r[4]}</td></tr>`).join('')}</tbody>
+      <tbody>${rows.map((r) => {
+        const demo = cases.find((c) => c.id === r[3]) || details[r[3]];
+        const current = demo ? prettyState(demo.state) : null;
+        const chain = stagesOf(r[2]).map((s) => s === current ? `<strong class="stage-current" aria-current="true">${esc(s)}</strong>` : esc(s)).join(' → ');
+        // AXE-1 (2026-11-06): this row carries an inner demo-case link,
+        // so it must NOT also carry role="button" — a link inside a
+        // button-role row is a nested-interactive axe violation. The row
+        // stays clickable (bindCaseRows: click + Enter/Space) and the
+        // link is the accessible control; other clickable rows without
+        // inner links keep role="button" (L2).
+        return `<tr class="clickable" data-open="${r[3]}"><td><strong>${r[0]}</strong></td><td>${r[1]}</td><td>${chain}</td><td class="num"><a href="?case=${r[3]}" data-case="${r[3]}">${r[3]}</a></td><td>${r[4]}</td></tr>`;
+      }).join('')}</tbody>
     </table></div></section>`;
   bindCaseRows($('#view'));
 }
@@ -390,7 +746,7 @@ function allEvidence() {
   return out;
 }
 function renderEvidenceView() {
-  setBreadcrumb('Evidence');
+  setBreadcrumb('');
   const items = allEvidence().filter((e) => evidenceFilter === 'All' || e.status === evidenceFilter);
   const filters = ['All', 'Verified', 'Unverified', 'Disputed'];
   $('#view').innerHTML = `
@@ -402,48 +758,66 @@ function renderEvidenceView() {
     <section class="panel"><div class="table-wrap"><table>
       <caption>${items.length} item${items.length === 1 ? '' : 's'}${evidenceFilter === 'All' ? '' : ` — status ${evidenceFilter}`}.</caption>
       <thead><tr><th scope="col">ID</th><th scope="col">Type</th><th scope="col">Source</th><th scope="col">Case</th><th scope="col">Status</th><th scope="col">Note</th></tr></thead>
-      <tbody>${items.map((e) => `<tr class="clickable" data-open="${e.caseId}"><td><span class="tag-ev">[${esc(e.id)}]</span></td><td>${esc(e.type)}</td><td>${esc(e.source)}</td><td class="num">${esc(e.caseId)}</td><td>${esc(e.status)}</td><td class="muted">${esc(e.note || '')}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">No evidence with status ${esc(evidenceFilter)}.</td></tr>`}</tbody>
+      <tbody>${items.map((e) => `<tr class="clickable" data-open="${e.caseId}" role="button" aria-label="Open case ${esc(e.caseId)} — ${esc(e.caseTitle)}"><td><span class="tag-ev">[${esc(e.caseId)} · ${esc(e.id)}]</span></td><td>${esc(e.type)}</td><td>${esc(e.source)}</td><td class="num">${esc(e.caseId)}<br><span class="muted small">${esc(e.caseTitle)}</span></td><td>${esc(e.status)}</td><td class="muted">${esc(e.note || '')}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">No evidence with status ${esc(evidenceFilter)}.</td></tr>`}</tbody>
     </table></div></section>`;
   $$('[data-filter]', $('#view')).forEach((b) => b.addEventListener('click', () => { evidenceFilter = b.dataset.filter; renderEvidenceView(); }));
   bindCaseRows($('#view'));
 }
 function renderDecisionsView() {
-  setBreadcrumb('Decisions');
+  setBreadcrumb('');
   const pending = cases.filter((c) => (details[c.id] || c).pendingApproval);
   const decided = cases.filter((c) => (details[c.id] || c).approval);
   $('#view').innerHTML = `
     <h1 class="section-title">Decisions</h1>
     <p class="section-sub">Approvals are human-only and recorded as a signed sentence in the audit trail.</p>
     <section class="panel" aria-labelledby="pend-h"><h2 id="pend-h">Awaiting approval</h2>
-      ${pending.length ? pending.map((c) => { const d = details[c.id]; return `<div class="decision-row"><div><div class="dr-title"><span class="num">${esc(c.id)}</span> — ${esc(c.title)}</div><div class="dr-sub">${esc(d.pendingApproval.terms)} · requested by ${esc(d.pendingApproval.requestedBy)}</div></div><button class="ghost-btn btn-sm" data-open="${esc(c.id)}">Review &amp; approve</button></div>`; }).join('') : '<p class="empty">No pending approvals.</p>'}
+      ${pending.length ? pending.map((c) => { const d = details[c.id]; return `<div class="decision-row"><div><div class="dr-title"><span class="num">${esc(c.id)}</span> — ${esc(c.title)}</div><div class="dr-sub">${esc(d.pendingApproval.terms)} · requested by ${esc(d.pendingApproval.requestedBy)}</div></div><button class="ghost-btn btn-sm" data-open="${esc(c.id)}">Review &amp; approve</button></div>`; }).join('') : '<p class="empty">No pending approvals.</p><p class="small muted">Approvals are requested from a case workspace — open a case in Awaiting approval.</p>'}
     </section>
     <section class="panel" aria-labelledby="dec-h"><h2 id="dec-h">Decided</h2>
-      ${decided.length ? decided.map((c) => { const d = details[c.id]; const a = d.approval; return `<div class="decision-sentence">“I approve ${esc(a.terms)}.” — ${esc(a.approvedBy)}, ${fmtDateTime(a.approvedAt)} · case <span class="num">${esc(c.id)}</span></div>`; }).join('') : '<p class="empty">No decisions recorded yet. Approve HAG-014 to see the signed sentence here.</p>'}
+      ${decided.length ? decided.map((c) => { const d = details[c.id]; const a = d.approval; return `<div class="decision-sentence">“I approve ${esc(a.terms)}.” — ${esc(a.approvedBy)}, ${fmtDateTime(a.approvedAt)} · case <a href="?case=${esc(c.id)}" data-case="${esc(c.id)}"><span class="num">${esc(c.id)}</span></a></div>`; }).join('') : '<p class="empty">No decisions recorded yet. Approve HAG-014 to see the signed sentence here.</p>'}
     </section>`;
   bindCaseRows($('#view'));
 }
 function renderActivityView() {
-  setBreadcrumb('Activity');
-  const items = activityFeed();
+  setBreadcrumb('');
+  const items = activityFeed().filter((a) => activityCaseFilter === 'All' || a.caseId === activityCaseFilter);
   $('#view').innerHTML = `
     <h1 class="section-title">Activity</h1>
     <p class="section-sub">Audit trail across all cases. Every state change, proposal and room message is logged.</p>
+    <div class="filter-row" role="group" aria-label="Filter activity by case">
+      <button class="ghost-btn btn-sm ${activityCaseFilter === 'All' ? 'is-active' : ''}" data-activity-filter="All" aria-pressed="${activityCaseFilter === 'All'}">All cases</button>
+      ${cases.map((c) => `<button class="ghost-btn btn-sm ${activityCaseFilter === c.id ? 'is-active' : ''}" data-activity-filter="${esc(c.id)}" aria-pressed="${activityCaseFilter === c.id}">${esc(c.id)}</button>`).join('')}
+    </div>
     <section class="panel"><h2>All activity</h2>
-      ${items.length ? `<ol class="audit-list">${items.map((a) => `<li>${a.at ? `<span class="au-time">${fmtDateTime(a.at)}</span>` : '<span class="au-time">seeded</span>'}${esc(a.text)}</li>`).join('')}</ol>` : '<p class="empty">No activity recorded yet.</p>'}
+      ${items.length ? `<ol class="audit-list">${items.map((a) => `<li>${a.at ? `<span class="au-time">${fmtDateTime(a.at)}</span>` : '<span class="au-time">date not recorded</span>'}${activityItemHtml(a, false)}</li>`).join('')}</ol>` : '<p class="empty">No activity recorded yet.</p>'}
     </section>`;
+  $$('[data-activity-filter]', $('#view')).forEach((b) => b.addEventListener('click', () => { activityCaseFilter = b.dataset.activityFilter; renderActivityView(); }));
+  bindCaseRows($('#view'));
 }
 function renderSettingsView() {
-  setBreadcrumb('Settings');
+  setBreadcrumb('');
+  // M11: this was labelled "Settings" but is a status readout with no
+  // controls — renamed to Environment. Health is plain words (the raw
+  // error stays in a title attribute); Switch versions come from
+  // /api/status, not hardcoded client text. L1: the demo identity is
+  // labelled here as fixed, with no sign-in.
+  const ver = switchVersionText();
+  const sh = statusData?.switchHealth;
+  const health = !sh ? { text: '—', title: '' }
+    : sh.ok === false ? { text: 'Server did not answer the health check', title: sh.error || 'health probe failed' }
+    : sh.status !== undefined ? { text: String(sh.status), title: sh.note || '' }
+    : sh.note ? { text: sh.note, title: '' } : { text: '—', title: '' };
   $('#view').innerHTML = `
-    <h1 class="section-title">Settings</h1>
+    <h1 class="section-title">Environment</h1>
     <p class="section-sub">Environment and integration status for this workspace.</p>
-    <section class="panel"><h2>Environment</h2>
+    <section class="panel"><h2>Integration status</h2>
       <dl class="kv">
         <dt>Switch mode</dt><dd>${esc(statusData?.switchMode || '—')}</dd>
-        <dt>Switch Console / core</dt><dd>0.40.1 / 0.31.0</dd>
-        <dt>Switch health</dt><dd>${esc((() => { const sh = statusData?.switchHealth; if (!sh) return '—'; if (sh.status !== undefined) return String(sh.status); if (sh.note) return sh.note; if (sh.ok === false) return `Unreachable — ${sh.error || 'health probe failed'}`; return '—'; })())}</dd>
+        <dt>Switch Console / core</dt><dd>${ver ? `${esc(ver.console)} / ${esc(ver.core)}` : '—'}</dd>
+        <dt>Switch health</dt><dd${health.title ? ` title="${esc(health.title)}"` : ''}>${esc(health.text)}</dd>
         <dt>Cases in workspace</dt><dd>${cases.length}</dd>
         <dt>Demo data</dt><dd>Fictional — labelled throughout</dd>
+        <dt>Identity</dt><dd>Demo identity — Mara (owner). No sign-in; every visitor sees the same identity. This is a demo limitation, not production authorization.</dd>
       </dl>
       <p class="small muted" style="margin-top:10px">Point this app at a real Switch server by setting SWITCH_BASE_URL and a real agent key; the stub is used only while SWITCH_BASE_URL is unset. Keyboard: ⌘K focuses search.</p>
     </section>`;
@@ -500,7 +874,7 @@ function wizardReviewStep() {
     <h3>Calculation — deterministic, no LLM maths</h3>
     <dl class="kv">
       <dt>Cream / serving</dt><dd>${money(a.oldCreamCostPerServing)} → ${money(a.newCreamCostPerServing)}</dd>
-      <dt>Extra cost</dt><dd>+${money(a.costDiffPerServing)} / serving · ${money(a.monthlyExtraCost)} / month · ${money(a.annualExtraCost)} / year</dd>
+      <dt>Extra cost</dt><dd>${signedMoney(a.costDiffPerServing)} / serving · ${money(a.monthlyExtraCost)} / month · ${money(a.annualExtraCost)} / year</dd>
       <dt>Food cost</dt><dd>${pct(a.oldFoodCostPct)} → ${pct(a.newFoodCostPct)} (target ${esc(String(v.targetFoodCostPct))}%)</dd>
       <dt>Gross margin</dt><dd>${pct(a.oldGrossMarginPct)} → ${pct(a.newGrossMarginPct)}</dd>
       <dt>Max sustainable price</dt><dd>${money(a.maxSustainableUnitPrice)} / ${esc(v.unit)}</dd>
@@ -635,8 +1009,8 @@ function renderCase() {
       </div>
       <div class="move-to">
         <label class="visually-hidden" for="move-select">Move case to</label>
-        <select id="move-select">${(TRANSITIONS[c.state] || []).map((t) => `<option value="${t}">Move to ${t.replace(/_/g, ' ')}</option>`).join('') || '<option value="">No moves available</option>'}</select>
-        <button class="ghost-btn" id="move-btn" ${(TRANSITIONS[c.state] || []).length ? '' : 'disabled'}>Move</button>
+        <select id="move-select">${moveOptions(c.state).map((t) => `<option value="${t}">Move to ${t.replace(/_/g, ' ')}</option>`).join('') || '<option value="">No moves available</option>'}</select>
+        <button class="ghost-btn" id="move-btn" ${moveOptions(c.state).length ? '' : 'disabled'}>Move</button>
         <button class="ghost-btn" id="back-btn">← All cases</button>
       </div>
     </div>
@@ -655,7 +1029,7 @@ function renderCase() {
     const to = $('#move-select').value; if (!to) return;
     try { await transition(c.id, to); } catch (e) { showCaseError(e.message); }
   });
-  $$('.tab', $('#view')).forEach((t) => t.addEventListener('click', () => { currentTab = t.dataset.tab; renderCase(); }));
+  $$('.tab', $('#view')).forEach((t) => t.addEventListener('click', () => { currentTab = t.dataset.tab; renderCase(); syncCaseHash(); }));
   // Arrow-key navigation across tabs (QA 2026-11-06): the tabs had
   // role=tab/aria-selected but no keyboard pattern.
   $$('.tab', $('#view')).forEach((t) => t.addEventListener('keydown', (e) => {
@@ -666,7 +1040,7 @@ function renderCase() {
     else if (e.key === 'ArrowLeft') next = ids[(i - 1 + ids.length) % ids.length];
     else if (e.key === 'Home') next = ids[0];
     else if (e.key === 'End') next = ids[ids.length - 1];
-    if (next) { e.preventDefault(); currentTab = next; renderCase(); const el = $(`#tab-${next}`); if (el) el.focus(); }
+    if (next) { e.preventDefault(); currentTab = next; renderCase(); syncCaseHash(); const el = $(`#tab-${next}`); if (el) { el.focus(); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } }
   }));
   bindCaseEvents(c);
 }
@@ -680,6 +1054,36 @@ async function transition(caseId, to, extra = {}) {
   cases = await api('/api/cases');
   render();
 }
+// GAP-2 (2026-11-06): submit a strategy for approval — the ONLY UI
+// path into AWAITING_APPROVAL (the Move dropdown cannot send a
+// proposal, GAP-1). DISCUSSION -> PROPOSAL -> AWAITING_APPROVAL with
+// the canonical proposalId + the exact terms for the selected strategy,
+// all from the deterministic engine data — never invented. allowReplace
+// (the approval modal's re-route only) steps back from AWAITING first
+// when the owner changes strategy at approve time; the Submit button
+// refuses when a proposal is already pending (the server 400s a
+// duplicate as the backstop). Re-fetches the case detail + list
+// afterwards so the UI never shows a stale workflow state after the
+// action. Throws a clear error on an unknown strategy, a duplicate, or
+// a failed step — the case is left unchanged on a client-side refusal,
+// and a server failure mid-sequence leaves it in a retryable state
+// (PROPOSAL still offers Submit; the error is shown, not swallowed).
+async function submitProposal(c, s, allowReplace = false) {
+  const proposalId = proposalIdForStrategy(s.id);
+  if (!proposalId) throw new Error(`Unknown strategy ${s.id} — cannot submit a proposal for it.`);
+  const terms = termsForStrategy(s);
+  const cur = await api(`/api/cases/${c.id}`);
+  if (cur.pendingApproval || cur.state === 'AWAITING_APPROVAL') {
+    if (!allowReplace) throw new Error('A proposal is already pending for this case — approve or reject it before submitting another.');
+    await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'DISCUSSION', actor: 'Mara (owner)', actorKind: 'human' }) });
+  }
+  const cur2 = await api(`/api/cases/${c.id}`);
+  if (cur2.state === 'DISCUSSION') await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'PROPOSAL', actor: 'Mara (owner)', actorKind: 'human' }) });
+  await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'AWAITING_APPROVAL', actor: 'Mara (owner)', actorKind: 'human', proposalId, terms: terms.full }) });
+  details[c.id] = await api(`/api/cases/${c.id}`);
+  cases = await api('/api/cases');
+  render();
+}
 function summaryPanel(c) {
   if (c.workflow === 'HAGGLE') return haggleSummary(c);
   if (c.workflow === 'COURT') return courtSummary(c);
@@ -687,24 +1091,45 @@ function summaryPanel(c) {
 }
 function haggleSummary(c) {
   const a = c.analysis, i = c.input;
+  // H9 (remediation 2026-11-06): once an approval exists, the hero and
+  // every figure in this panel show the APPROVED strategy's impact —
+  // never the unmitigated supplier shock. The supplier's $0.24 proposal
+  // stays visible only as labelled context (Analysis tab). When the
+  // approval carries no known strategy, the hero is explicitly labelled
+  // as the unmitigated "if accepted" figure instead of silently
+  // implying it is the outcome.
+  const ap = c.approval ? approvedStrategy(c) : null;
+  const heroPerServing = ap ? ap.creamCostPerServing - a.oldCreamCostPerServing : a.costDiffPerServing;
+  const heroMonthly = ap ? ap.extraVsOldPerMonth : a.monthlyExtraCost;
+  const heroFoodPct = ap ? ap.foodCostPct : a.newFoodCostPct;
+  const heroCream = ap ? ap.creamCostPerServing : a.newCreamCostPerServing;
+  const heroTotal = ap ? ap.totalCostPerServing : a.newTotalCostPerServing;
+  const heroMargin = 100 - heroFoodPct;
+  const heroNote = ap
+    ? `Approved terms: ${esc(c.approval.terms)} — impact of the approved price, not the supplier's ${money(i.newPrice)} proposal (which would be ${signedMoney(a.monthlyExtraCost)}/mo, ${pct(a.newFoodCostPct)} food cost).`
+    : (c.approval
+      ? `If the ${money(i.newPrice)} rise were accepted — no priced strategy is recorded for this approval.`
+      : `If the ${money(i.newPrice)} rise were accepted.`);
   return `<section class="panel" aria-labelledby="fin-h">
     <h2 id="fin-h">Financial impact — deterministic</h2>
-    <div class="hero"><span class="hero-neg">+${money(a.costDiffPerServing)}</span> <small>/ serving · ${money(a.monthlyExtraCost)} / month</small></div>
+    <div class="hero"><span class="hero-neg">${signedMoney(heroPerServing)}</span> <small>/ serving · ${money(heroMonthly)} / month</small></div>
+    <p class="small muted" style="margin:6px 0 0">${heroNote}</p>
     <p class="small muted" style="margin:6px 0 0">Cream ${money(i.oldPrice)} → ${money(i.newPrice)} / ${esc(i.unit)} (${a.pctChange === null ? '—' : '+' + a.pctChange + '%'}) · ${i.qtyPerServing} ${esc(i.unit)} / ${esc(i.recipe)} · menu ${money(i.menuPrice)}</p>
     <div class="bullet-wrap">
-      <div class="bullet" role="img" aria-label="Food cost rises from ${pct(a.oldFoodCostPct)} to ${pct(a.newFoodCostPct)}; target is ${i.targetFoodCostPct} percent">
-        <span class="bullet-bar" style="width:${(a.newFoodCostPct / 40 * 100).toFixed(1)}%"></span>
+      <div class="bullet" role="img" aria-label="Food cost rises from ${pct(a.oldFoodCostPct)} to ${pct(heroFoodPct)}; target is ${i.targetFoodCostPct} percent">
+        <span class="bullet-bar" style="width:${(heroFoodPct / 40 * 100).toFixed(1)}%"></span>
         <span class="bullet-target" style="left:${(i.targetFoodCostPct / 40 * 100).toFixed(1)}%" title="Target ${i.targetFoodCostPct}%"></span>
         <span class="bullet-old" style="left:${(a.oldFoodCostPct / 40 * 100).toFixed(1)}%" title="Before ${pct(a.oldFoodCostPct)}"></span>
       </div>
       <div class="bullet-scale" aria-hidden="true"><span>0%</span><span>20%</span><span>40%</span></div>
+      <p class="small bullet-legend" aria-hidden="true"><span><span class="legend-old">—</span> Before ${pct(a.oldFoodCostPct)}</span><span><span class="legend-target">|</span> Target ${i.targetFoodCostPct}%</span></p>
     </div>
-    <p class="small">Food cost ${pct(a.oldFoodCostPct)} → <strong>${pct(a.newFoodCostPct)}</strong> · target ${i.targetFoodCostPct}% · ${money(a.annualExtraCost)}/yr</p>
+    <p class="small">Food cost ${pct(a.oldFoodCostPct)} → <strong>${pct(heroFoodPct)}</strong> · target ${i.targetFoodCostPct}% · ${money(heroMonthly * 12)}/yr</p>
     <h3>Financials</h3>
     <dl class="kv">
-      <dt>Cream / serving</dt><dd>${money(a.oldCreamCostPerServing)} → ${money(a.newCreamCostPerServing)}</dd>
-      <dt>Food cost / serving</dt><dd>${money(a.oldTotalCostPerServing)} → ${money(a.newTotalCostPerServing)}</dd>
-      <dt>Gross margin</dt><dd>${pct(a.oldGrossMarginPct)} → ${pct(a.newGrossMarginPct)}</dd>
+      <dt>Cream / serving</dt><dd>${money(a.oldCreamCostPerServing)} → ${money(heroCream)}</dd>
+      <dt>Food cost / serving</dt><dd>${money(a.oldTotalCostPerServing)} → ${money(heroTotal)}</dd>
+      <dt>Gross margin</dt><dd>${pct(a.oldGrossMarginPct)} → ${pct(heroMargin)}</dd>
       <dt>Max sustainable price</dt><dd>${money(a.maxSustainableUnitPrice)} / ${esc(i.unit)}</dd>
       <dt>Volume</dt><dd>${i.monthlySales} servings / month</dd>
     </dl>
@@ -734,13 +1159,18 @@ function courtSummary(c) {
   const leaderRow = ts.complete
     ? `<dt>Leading by blind mean</dt><dd>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</dd>`
     : `<dt>Tally</dt><dd>Hidden — ${ts.submitted} of ${ts.expected} ratings in</dd>`;
+  const canonicalRow = c.canonicalVersion
+    ? `<dt>Canonical version</dt><dd>${esc((c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion)} — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}</dd>`
+    : '';
   return `<section class="panel" aria-labelledby="court-sum-h">
     <h2 id="court-sum-h">Recipe court — summary</h2>
+    <p class="small" style="margin-bottom:10px">Facilitator view — you can see all versions; tasters see codes only.</p>
     <dl class="kv">
       <dt>Versions</dt><dd>${c.versions.length}</dd>
       <dt>Conflicting variables</dt><dd>${conflicts} of ${c.conflicts.length}</dd>
       <dt>Blind readers</dt><dd>${cs.readers.length}</dd>
       ${leaderRow}
+      ${canonicalRow}
     </dl>
     <p class="small muted" style="margin-top:10px">Coded samples, independent ratings (1–5). Scores are shown as submitted; the tally, the version mapping and the leader stay hidden until every reader has submitted. The dissenting version is preserved, never deleted.</p>
     <h3>Versions</h3>
@@ -801,7 +1231,7 @@ function overviewTab(c) {
   if (c.workflow === 'CORRECTION') {
     const claims = (c.claims || []).map((cl) => getClaim(c, cl));
     parts.push(`<section class="panel"><h2>What happened</h2>
-      <p>The Verification Agent extracted ${claims.length} factual claims from the episode transcript. The guest corrects timestamped claims with evidence in the Switch room; the host approves the errata before publication.</p></section>`);
+      <p>The Verification Agent extracted ${claims.length} factual claims from the episode transcript. The guest corrects factual claims with evidence in the Switch room; the host approves the errata before publication.</p></section>`);
   }
   // Participants live in the right rail (railPanels) — the overview tab
   // used to render them a second time (QA 2026-11-06).
@@ -810,7 +1240,15 @@ function overviewTab(c) {
 function analysisTab(c) {
   if (c.workflow === 'HAGGLE') {
     const a = c.analysis, i = c.input;
+    // H9: the table below is the supplier proposal's unmitigated shock;
+    // when an approval exists, say so up front with the approved figures
+    // so this panel cannot be read as the current outcome.
+    const ap = c.approval ? approvedStrategy(c) : null;
+    const approvedBanner = ap
+      ? `<p class="small" style="margin-bottom:10px"><strong>Approved impact: ${signedMoney(ap.extraVsOldPerMonth)} / month · food cost ${pct(ap.foodCostPct)}</strong> (${esc(c.approval.terms)}). The table below is the supplier's ${money(i.newPrice)} proposal if it had been accepted in full.</p>`
+      : '';
     return `<section class="panel" aria-labelledby="an-h"><h2 id="an-h">Analysis — deterministic, no LLM maths</h2>
+      ${approvedBanner}
       <div class="table-wrap"><table>
         <caption>All figures from the shared decision engine; units travel with every number.</caption>
         <thead><tr><th scope="col">Measure</th><th scope="col" class="num">Before</th><th scope="col" class="num">Now</th></tr></thead>
@@ -825,7 +1263,7 @@ function analysisTab(c) {
       <p class="small muted" style="margin-top:10px">Assumptions: ${i.qtyPerServing} ${esc(i.unit)} per serving · other ingredients ${money(i.otherIngredientsCostPerServing)} · menu ${money(i.menuPrice)} · ${i.monthlySales} servings/month. Evidence: <span class="tag-ev">[E1]</span> invoice, <span class="tag-ev">[E2]</span> recipe.</p>
     </section>`;
   }
-  if (c.workflow === 'COURT') return courtMatrix(c) + courtHeat(c);
+  if (c.workflow === 'COURT') return courtMatrix(c) + courtHeat(c) + courtVersionForm(c);
   const claims = (c.claims || []).map((cl) => getClaim(c, cl));
   // The original transcript, sentence by sentence, with the
   // factual/opinion classification shown — QA 2026-11-06: the text
@@ -848,15 +1286,50 @@ function analysisTab(c) {
     <ol class="transcript-list">${transcriptRows}</ol></section>`;
   return transcriptPanel + claimsTable(c, claims, false);
 }
+// Leading sample by blind overall mean, or null while the tally is hidden.
+function courtLeader(c) {
+  const ts = courtTallyState(c);
+  if (!ts.complete) return null;
+  const cs = courtScoresFor(c);
+  const means = courtMeans(c);
+  const [code, m] = Object.entries(means).sort((a, b) => b[1].overall - a[1].overall)[0];
+  return { code, author: cs.samples[code], overall: m.overall, means };
+}
+// The tally block, shared by the Analysis heat table and the Negotiation
+// vote/adoption section (M13: one source, no duplicated content).
+// Names the leader and every losing version with its mean, records
+// dissent, and — once adopted — names the canonical version (H12, L3).
+function courtTallyBlock(c) {
+  const cs = courtScoresFor(c);
+  const ts = courtTallyState(c);
+  if (!ts.complete) {
+    return `<h3>Canonical recipe — tally</h3>
+    <p class="small"><strong>Tally hidden — ${ts.submitted} of ${ts.expected} ratings submitted.</strong> The version mapping and the leader stay hidden until every reader has rated every sample; the tally appears here then.</p>`;
+  }
+  const leader = courtLeader(c);
+  const meansLine = Object.entries(leader.means).map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ');
+  const losing = Object.entries(leader.means)
+    .filter(([code]) => code !== leader.code)
+    .map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ');
+  const canonical = c.canonicalVersion
+    ? `<p class="small" style="margin-top:6px"><strong>Canonical version: ${esc((c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion)}</strong> — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}, ${fmtDateTime(c.canonicalAdoption?.adoptedAt)}. The other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>`
+    : '';
+  return `<h3>Canonical recipe — tally</h3>
+    <p class="small">Leading by blind mean (overall): <strong>${esc(leader.author)} — ${leader.overall.toFixed(2)} / 5</strong>.
+    ${meansLine}.</p>
+    <p class="small muted" style="margin-top:6px">Dissent preserved: ${losing} — the other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>${canonical}`;
+}
 function courtMatrix(c) {
   return `<section class="panel" aria-labelledby="mx-h"><h2 id="mx-h">Comparison matrix — versions of one dish</h2>
     <div class="table-wrap"><table>
       <caption>Differing cells are marked Δ; agreeing cells are plain. ${c.conflicts.filter((x) => x.conflict).length} of ${c.conflicts.length} variables conflict.</caption>
       <thead><tr><th scope="col">Variable</th>${c.versions.map((v) => `<th scope="col">${esc(v.author)}</th>`).join('')}<th scope="col">Δ</th></tr></thead>
       <tbody>${c.conflicts.map((cf) => {
-        const distinct = [...new Set(cf.values.map((v) => v.value))];
-        const delta = cf.conflict ? distinct.join(' vs ') : '— agree';
-        return `<tr><td><strong>${esc(cf.variable)}</strong></td>${cf.values.map((v) => `<td class="${cf.conflict ? 'conflict-cell' : ''}">${esc(v.value)}${cf.conflict ? ' <span class="delta-tag">Δ</span>' : ''}</td>`).join('')}<td class="muted small">${esc(delta)}</td></tr>`;
+        // L6: the Δ column used to repeat the full "a pinch vs 1 tbsp
+        // vs none" list — duplicating what the Δ-marked cells already
+        // show and cramping the column at 390px. Now it is just Δ / —.
+        const delta = cf.conflict ? 'Δ' : '—';
+        return `<tr><td><strong>${esc(cf.variable)}</strong></td>${cf.values.map((v) => `<td class="${cf.conflict ? 'conflict-cell' : ''}">${esc(v.value)}${cf.conflict ? ' <span class="delta-tag">Δ</span>' : ''}</td>`).join('')}<td class="muted small delta-col">${esc(delta)}</td></tr>`;
       }).join('')}</tbody></table></div>
     <p class="small muted" style="margin-top:8px">Evidence: <span class="tag-ev">[E1]</span> handwritten card photo — the original.</p>
   </section>`;
@@ -884,6 +1357,11 @@ function courtHeat(c) {
       ${vals.map((v) => `<td class="num ${heat(v)}">${typeof v === 'number' ? v : '—'}</td>`).join('')}
       <td class="num">${ts.complete && means && typeof means[crit] === 'number' ? means[crit].toFixed(2) : '—'}</td><td class="num">${range}</td></tr>`;
   }).join('') : `<tr><td colspan="${cs.readers.length + 3}">No ratings submitted yet for this sample — be the first to rate it below.</td></tr>`;
+  // The tally block is inlined here (rather than calling courtTallyBlock)
+  // because tests/p0-fixes.test.js extracts courtHeat standalone with
+  // only esc/courtScoresFor/courtTallyState/courtMeans in scope. The
+  // Negotiation tab uses the shared courtTallyBlock below; keep the two
+  // renderings identical in wording.
   const leader = Object.entries(courtMeans(c)).sort((a, b) => b[1].overall - a[1].overall)[0];
   // The sample→version mapping is blind information: show codes only
   // until the tally is complete (QA 2026-11-06).
@@ -892,7 +1370,7 @@ function courtHeat(c) {
     ? `<h3>Canonical recipe — tally</h3>
     <p class="small">Leading by blind mean (overall): <strong>${esc(cs.samples[leader[0]])} — ${leader[1].overall.toFixed(2)} / 5</strong>.
     ${Object.entries(courtMeans(c)).map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ')}.</p>
-    <p class="small muted" style="margin-top:6px">Dissent preserved: the other two versions stay on the record as footnotes to the canonical recipe — never deleted.</p>`
+    <p class="small muted" style="margin-top:6px">Dissent preserved: ${Object.entries(courtMeans(c)).filter(([code]) => code !== leader[0]).map(([code, m]) => `${esc(cs.samples[code])} ${m.overall.toFixed(2)}`).join(' · ')} — the other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>${c.canonicalVersion ? `<p class="small" style="margin-top:6px"><strong>Canonical version: ${esc((c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion)}</strong> — adopted by ${esc(c.canonicalAdoption?.adoptedBy || '')}. The other versions stay on the record as footnotes to the canonical recipe — never deleted.</p>` : ''}`
     : `<h3>Canonical recipe — tally</h3>
     <p class="small"><strong>Tally hidden — ${ts.submitted} of ${ts.expected} ratings submitted.</strong> The version mapping and the leader stay hidden until every reader has rated every sample; the tally appears here then.</p>`;
   return `<section class="panel" aria-labelledby="blind-h"><h2 id="blind-h">Blind scores — heat table (1–5)</h2>
@@ -910,37 +1388,86 @@ function courtHeat(c) {
       <label>Reader <select id="rating-reader" required>${(c.readers || []).map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select></label>
       <label>Sample <select id="rating-sample" required>${(c.samples || []).map((s) => `<option value="${esc(s.code)}">${esc(s.code)}</option>`).join('')}</select></label>
       ${cs.criteria.map((crit) => `<label>${esc(crit)} <input type="number" min="1" max="5" step="1" required data-crit="${esc(crit)}" aria-label="${esc(crit)} score 1 to 5"></label>`).join('')}
+      <p class="inline-error" id="rating-error" role="alert" hidden></p>
       <button class="btn btn-sm" type="submit">Submit rating</button>
     </form>
     <p class="small muted" id="rating-note">Ratings are server-held and cannot be changed once submitted — a duplicate is rejected (409). Samples are codes only, so the rating stays blind.</p>
   </section>`;
 }
+// H11 — version submission. A version may be added only while the case
+// has zero ratings; once ratings have begun the form explains why it
+// is closed (adding a sample mid-test would change the tally's
+// expected count). The server enforces the same rule.
+function courtVersionForm(c) {
+  const ts = courtTallyState(c);
+  if (ts.submitted > 0) {
+    return `<section class="panel" aria-labelledby="ver-h"><h2 id="ver-h">Submit a version</h2>
+      <p class="small">Versions cannot be added once ratings have begun — ${ts.submitted} of ${ts.expected} ratings are already in. Adding a sample mid-test would change the tally's expected count, so new versions must be submitted before the first rating.</p>
+    </section>`;
+  }
+  return `<section class="panel" aria-labelledby="ver-h"><h2 id="ver-h">Submit a version</h2>
+    <p class="small muted" style="margin-bottom:10px">Add your version of the dish before any ratings are submitted. It becomes the next coded sample (${'S' + (c.samples.length + 1)}) — the mapping stays blind until the tally is complete, and every version stays on the record.</p>
+    <form class="rating-form" id="version-form">
+      <label>Author <input type="text" id="version-author" required placeholder="e.g. Zia" autocomplete="off"></label>
+      <label style="flex:1 1 100%">Ingredients — one per line, “name: amount” <textarea id="version-ingredients" rows="3" required placeholder="salt: a pinch&#10;fat: lard&#10;simmer: 3 hours"></textarea></label>
+      <label style="flex:1 1 100%">Steps — one per line (optional) <textarea id="version-steps" rows="3" placeholder="Brown the meat&#10;Simmer 3 hours"></textarea></label>
+      <button class="btn btn-sm" type="submit">Submit version</button>
+    </form>
+    <p class="small muted" id="version-note"></p>
+  </section>`;
+}
 function claimsTable(c, claims, interactive) {
   return `<section class="panel" aria-labelledby="cl-h"><h2 id="cl-h">Claims from the transcript</h2>
     <p class="small muted" style="margin-bottom:10px">Claim statuses are persisted by the server and recorded in the audit trail. Only a human (host/guest) may change a status — the Verification Agent proposes.</p>
-    <div class="table-wrap"><table>
+    <div class="table-wrap"><table class="claims-table">
       <caption>${claims.length} factual claims extracted by rule, not by LLM.</caption>
       <thead><tr><th scope="col">Claim</th><th scope="col">Kind</th><th scope="col">Status</th><th scope="col">Evidence</th>${interactive ? '<th scope="col">Actions</th>' : ''}</tr></thead>
       <tbody>${claims.map((cl) => {
-        const ev = (CLAIM_EVIDENCE[cl.id] || []).map((e) => `<span class="tag-ev">[${e}]</span>`).join(' ') || '—';
+        // L5: evidence references come from the server (detail endpoint),
+        // matched against the case's evidence notes — no client map.
+        const ev = (cl.evidence || []).map((e) => `<span class="tag-ev">[${e}]</span>`).join(' ') || '—';
         const statusCls = { Verified: 'pill-teal', Corrected: 'pill-teal', Clarified: 'pill-grey', Disputed: 'pill-amber', Unresolved: 'pill-grey' }[cl.status] || 'pill-grey';
-        let row = `<tr><td><span class="num">${esc(cl.id)}</span> ${esc(cl.text)}${cl.challenge ? `<div class="challenge-note">Guest challenge (${esc(cl.challenge.by)}): “${esc(cl.challenge.text)}”${cl.challenge.evidence ? ` · cites <span class="tag-ev">[${esc(cl.challenge.evidence)}]</span>` : ''}</div>` : ''}</td>
+        let row = `<tr data-claim="${esc(cl.id)}"><td><span class="num">${esc(cl.id)}</span> ${esc(cl.text)}${cl.challenge ? `<div class="challenge-note">Guest challenge (${esc(cl.challenge.by)}): “${esc(cl.challenge.text)}”${cl.challenge.evidence ? ` · cites <span class="tag-ev">[${esc(cl.challenge.evidence)}]</span>` : ''}</div>` : ''}</td>
           <td>${esc(cl.kind)}</td><td><span class="pill ${statusCls}">${esc(cl.status)}</span></td><td>${ev}</td>`;
         if (interactive) {
           row += `<td>
             ${cl.status === 'Unresolved' ? `<button class="ghost-btn btn-sm" data-verify="${esc(cl.id)}">Host: mark verified</button> ` : ''}
+            ${cl.status !== 'Clarified' ? `<button class="ghost-btn btn-sm" data-clarify="${esc(cl.id)}">Host: mark clarified</button> ` : ''}
             ${cl.status !== 'Corrected' ? `<button class="ghost-btn btn-sm" data-challenge="${esc(cl.id)}">Guest: challenge</button> ` : ''}
             ${cl.status === 'Disputed' ? `<button class="btn btn-sm" data-approve-claim="${esc(cl.id)}">Host: approve correction</button>` : ''}
           </td>`;
         }
         return row + '</tr>';
       }).join('')}</tbody></table></div>
-    <div id="challenge-slot"></div>
   </section>`;
 }
 function negotiationTab(c) {
   if (c.workflow === 'HAGGLE') return haggleNegotiation(c);
-  if (c.workflow === 'COURT') return courtMatrix(c) + courtHeat(c) + `<section class="panel"><h2>Family vote</h2><p>The family votes in the Switch room ${esc(c.switchRoom)} — the tally above is the blind result; the vote is the decision. <button class="ghost-btn btn-sm" data-room-btn>Open room transcript</button></p></section>`;
+  // M13: Negotiation holds the vote/adoption content only — the matrix,
+  // heat table and rating form live in Analysis and are not duplicated here.
+  if (c.workflow === 'COURT') {
+    const ts = courtTallyState(c);
+    const leader = courtLeader(c);
+    let decision;
+    if (c.canonicalVersion) {
+      const author = (c.versions.find((v) => v.id === c.canonicalVersion) || {}).author || c.canonicalVersion;
+      decision = `<div class="approve-stamp"><span class="stamp-word">Canonical ✓</span><br>
+        “${esc(author)} is the canonical version.” — <b>${esc(c.canonicalAdoption?.adoptedBy || '')}</b>, ${fmtDateTime(c.canonicalAdoption?.adoptedAt)}</div>
+        <p class="small muted" style="margin-top:8px">The losing versions stay on the record as footnotes — never deleted.</p>`;
+    } else if (ts.complete && leader) {
+      decision = `<p class="small">The tally is complete. Adopting records the decision in the audit trail, like a HAGGLE approval — the losing versions stay on the record as footnotes.</p>
+        <p><button class="btn" id="adopt-btn">Adopt as canonical — ${esc(leader.author)} (${leader.overall.toFixed(2)} / 5)</button></p>
+        <p class="small muted">Human-only: only a human may adopt a version.</p>`;
+    } else {
+      decision = `<p class="empty">Adoption unlocks when the tally is complete — ${ts.submitted} of ${ts.expected} ratings in. Rate the remaining samples in the Analysis tab.</p>`;
+    }
+    return `<section class="panel" aria-labelledby="vote-h"><h2 id="vote-h">Family vote — adopt the canonical version</h2>
+      ${courtTallyBlock(c)}
+      <div style="margin-top:10px">${decision}</div>
+      <p class="small muted" id="adopt-note"></p>
+    </section>
+    <section class="panel"><h2>Family vote</h2><p>The family votes in the Switch room ${esc(c.switchRoom)} — the tally above is the blind result; the vote is the decision. <button class="ghost-btn btn-sm" data-room-btn>Open room transcript</button></p></section>`;
+  }
   const claims = (c.claims || []).map((cl) => getClaim(c, cl));
   const corrected = claims.filter((cl) => cl.status === 'Corrected');
   return claimsTable(c, claims, true) + `<section class="panel" aria-labelledby="err-h"><h2 id="err-h">Errata draft — pre-publish checklist</h2>
@@ -951,14 +1478,18 @@ function negotiationTab(c) {
 function haggleNegotiation(c) {
   const a = c.analysis, i = c.input;
   if (!selectedStrategy) {
-    selectedStrategy = (c.pendingApproval && PROPOSAL_TO_STRATEGY[c.pendingApproval.proposalId]) || 'counter-019';
+    selectedStrategy = (c.approval && PROPOSAL_TO_STRATEGY[c.approval.proposalId])
+      || (c.pendingApproval && PROPOSAL_TO_STRATEGY[c.pendingApproval.proposalId]) || 'counter-019';
   }
   const sel = (c.strategies || []).find((s) => s.id === selectedStrategy) || c.strategies[0];
   const timeline = [
     { price: money(i.oldPrice), label: `Old price — baseline`, who: 'DairyCo rate card' },
-    { price: money(i.newPrice), label: `Supplier proposal (+${a.pctChange}%)`, who: 'DairyCo rep' },
+    { price: money(i.newPrice), label: `Supplier proposal (${signedPct(a.pctChange)}%)`, who: 'DairyCo rep' },
     { price: '$0.19', label: 'Counter-offer — 6 weeks, in writing', who: 'DairyCo rep · P2' },
-    { price: c.approval ? money(0.19) : '?', label: c.approval ? `Approved — ${esc(c.approval.terms)}` : 'Approved — awaiting owner decision', who: c.approval ? c.approval.approvedBy : 'Owner' },
+    // M17: before approval there is no Approved step — the row is the
+    // decision still to come, not a completed one. After approval it
+    // names the approved terms and their price (from engine data).
+    { price: c.approval ? money((approvedStrategy(c) || { unitPrice: 0.19 }).unitPrice) : '?', label: c.approval ? `Approved — ${esc(c.approval.terms)}` : 'Approval — pending owner decision', who: c.approval ? c.approval.approvedBy : 'Owner' },
   ];
   return `<section class="panel" aria-labelledby="terms-h"><h2 id="terms-h">Negotiation — proposals &amp; terms</h2>
     <h3>Terms timeline</h3>
@@ -986,7 +1517,7 @@ function haggleNegotiation(c) {
 }
 function impactPanel(c, s) {
   const a = c.analysis;
-  const terms = STRATEGY_TERMS[s.id] || { short: money(s.unitPrice) + ' / fl oz', full: money(s.unitPrice) + '/fl oz' };
+  const terms = termsForStrategy(s);
   const inside = s.foodCostPct <= c.input.targetFoodCostPct;
   return `<h3>Impact — ${esc(s.name)}</h3>
     <dl class="kv">
@@ -1003,15 +1534,45 @@ function impactPanel(c, s) {
 }
 function approvalControls(c, s, terms) {
   if (c.approval) {
+    // M18: a visible next step after approval — completion needs no
+    // further approval (unchanged behaviour), it just records the
+    // agreement as complete. Only offered while APPROVED, not once
+    // the case is already COMPLETED.
+    const completeBtn = c.state === 'APPROVED'
+      ? `<button class="btn" id="complete-btn" style="margin-top:10px">Mark completed — record agreement</button>
+      <p class="small muted">Completion needs no further approval; this records the agreed terms as complete.</p>` : '';
     return `<div class="approve-stamp"><span class="stamp-word">Approved ✓</span><br>
-      “I approve ${esc(c.approval.terms)}.” — <b>${esc(c.approval.approvedBy)}</b>, ${fmtDateTime(c.approval.approvedAt)}</div>`;
+      “I approve ${esc(c.approval.terms)}.” — <b>${esc(c.approval.approvedBy)}</b>, ${fmtDateTime(c.approval.approvedAt)}</div>${completeBtn}`;
   }
-  if (c.state === 'AWAITING_APPROVAL' || c.state === 'PROPOSAL' || c.state === 'DISCUSSION') {
+  // M19: Approve/Reject exist ONLY while a pending approval exists.
+  // In DISCUSSION/PROPOSAL (or any other state with nothing pending)
+  // the buttons used to silently re-route the case through the state
+  // machine with hardcoded terms — now the empty state points at the
+  // next step instead.
+  if (c.pendingApproval) {
     return `<button class="btn" id="approve-btn">Approve ${esc(terms.short)}</button>
       <button class="ghost-btn" id="reject-btn">Reject pending terms</button>
-      <p class="small muted">Two-step: this opens a confirmation restating the exact terms. Only a human (Mara, owner) may approve.</p>`;
+      <p class="small muted">Two-step: approve opens a confirmation restating the exact terms and their financial impact; reject asks for confirmation too. Only a human (Mara, owner) may approve.</p>`;
   }
-  return `<p class="empty">No pending approval — case is ${esc(c.state)}. Use “Move to” above to advance the case until a proposal is submitted for approval.</p>`;
+  // GAP-2 (2026-11-06): the Submit for approval action — the only UI
+  // path that creates a pending proposal. Shown while the case is
+  // DISCUSSION or PROPOSAL with nothing pending and nothing approved.
+  // The exact terms for the selected strategy are shown above the
+  // button so the owner reviews them before submitting; the button
+  // label is exactly "Submit for approval" and the click is explicit
+  // (no auto-submit). A second submission while one is pending is
+  // impossible here (Approve/Reject render instead) and the server
+  // 400s a duplicate as the backstop.
+  if (c.state === 'DISCUSSION' || c.state === 'PROPOSAL') {
+    return `<p class="small">Proposed terms for <strong>${esc(s.name)}</strong>: ${esc(terms.full)}</p>
+      <button class="btn" id="submit-btn">Submit for approval</button>
+      <p class="small muted">Submitting creates a pending proposal for these exact terms. Only a human (Mara, owner) may approve or reject it.</p>
+      <p class="inline-error" id="submit-error" role="alert" hidden></p>`;
+  }
+  const guidance = (c.state === 'REJECTED' || c.state === 'BLOCKED')
+    ? 'Move the case back to DISCUSSION to submit a proposal.'
+    : 'This case cannot accept a new proposal.';
+  return `<p class="empty">No pending approval — case is ${esc(c.state)}. ${guidance}</p>`;
 }
 function evidenceTab(c) {
   const items = c.evidence || [];
@@ -1027,7 +1588,8 @@ function auditTab(c) {
   const events = c.audit || [];
   return `<section class="panel" aria-labelledby="au-h"><h2 id="au-h">Audit trail</h2>
     ${c.approval ? `<div class="decision-sentence">“I approve ${esc(c.approval.terms)}.” — ${esc(c.approval.approvedBy)}, ${fmtDateTime(c.approval.approvedAt)} · case <span class="num">${esc(c.id)}</span></div>` : '<p class="empty">No decision recorded yet — the signed sentence appears here once a human approves.</p>'}
-    ${events.length ? `<ol class="audit-list">${events.map((e) => `<li><span class="au-time">${fmtDateTime(e.at)}</span><strong>${esc(e.actor)}</strong> (${esc(e.kind)}) — ${esc(e.event)}</li>`).join('')}</ol>` : '<p class="empty">No audit events yet in this session. State changes, proposals and room messages are logged here.</p>'}
+    ${c.rejectedTerms ? `<div class="decision-sentence">“Rejected: ${esc(c.rejectedTerms.terms)}.” — ${esc(c.rejectedTerms.rejectedBy)}, ${fmtDateTime(c.rejectedTerms.rejectedAt)} · case <span class="num">${esc(c.id)}</span></div>` : ''}
+    ${events.length ? `<ol class="audit-list">${events.map((e) => `<li><span class="au-time">${fmtDateTime(e.at)}</span><strong>${esc(e.actor)}</strong> (${esc(e.kind)}) — ${esc(e.event)}${e.rejectedTerms ? ` — rejected terms: ${esc(e.rejectedTerms)}` : ''}</li>`).join('')}</ol>` : '<p class="empty">No audit events yet in this session. State changes, proposals and room messages are logged here.</p>'}
   </section>`;
 }
 function railPanels(c) {
@@ -1036,7 +1598,8 @@ function railPanels(c) {
   const approvals = `<section class="panel" aria-labelledby="appr-h"><h2 id="appr-h">Approvals</h2>
     ${c.pendingApproval ? `<p class="small">Pending: <strong>${esc(c.pendingApproval.terms)}</strong><br><span class="muted">requested by ${esc(c.pendingApproval.requestedBy)}</span></p>` : ''}
     ${c.approval ? `<div class="approve-stamp" style="margin-top:8px"><span class="stamp-word">Approved ✓</span><br>“I approve ${esc(c.approval.terms)}.” — <b>${esc(c.approval.approvedBy)}</b></div>` : ''}
-    ${!c.pendingApproval && !c.approval ? '<p class="empty">No pending approval on this case.</p>' : ''}
+    ${c.rejectedTerms ? `<p class="small" style="margin-top:8px">Rejected: <strong>${esc(c.rejectedTerms.terms)}</strong><br><span class="muted">rejected by ${esc(c.rejectedTerms.rejectedBy)}, ${fmtDateTime(c.rejectedTerms.rejectedAt)}</span></p>` : ''}
+    ${!c.pendingApproval && !c.approval && !c.rejectedTerms ? '<p class="empty">No pending approval on this case.</p>' : ''}
   </section>`;
   const room = `<section class="panel" aria-labelledby="room-h"><h2 id="room-h">Switch room</h2>
     <p class="small"><span class="num">${esc(c.switchRoom)}</span> · ${(c.participants || []).length} members</p>
@@ -1063,11 +1626,35 @@ function bindCaseEvents(c) {
   });
   $$('[data-sample]', $('#view')).forEach((b) => b.addEventListener('click', () => { courtSample = b.dataset.sample; renderCase(); }));
   const rf = $('#rating-form');
+  // L8: inline validation — an out-of-range or non-integer score names
+  // its dimension as you type, instead of failing only after submit.
+  // The server-side 400 stays the backstop.
+  if (rf) {
+    const showRatingError = (msg) => {
+      const el = $('#rating-error');
+      if (el) { el.textContent = msg || ''; el.hidden = !msg; }
+    };
+    $$('#rating-form input[data-crit]').forEach((inp) => inp.addEventListener('input', () => {
+      const v = inp.value === '' ? undefined : Number(inp.value);
+      const err = (inp.value !== '' && (!Number.isInteger(v) || v < 1 || v > 5))
+        ? `${inp.dataset.crit} must be a whole number from 1 to 5.` : null;
+      inp.setAttribute('aria-invalid', err ? 'true' : 'false');
+      showRatingError(err);
+    }));
+  }
   if (rf) rf.addEventListener('submit', async (e) => {
     e.preventDefault();
     const note = $('#rating-note');
     const scores = {};
-    $$('#rating-form input[data-crit]').forEach((inp) => { scores[inp.dataset.crit] = Number(inp.value); });
+    $$('#rating-form input[data-crit]').forEach((inp) => { scores[inp.dataset.crit] = inp.value === '' ? undefined : Number(inp.value); });
+    const inlineErr = validateRatingScores(scores);
+    if (inlineErr) {
+      const el = $('#rating-error');
+      if (el) { el.textContent = inlineErr; el.hidden = false; }
+      const bad = $$('#rating-form input[data-crit]').find((inp) => { const v = scores[inp.dataset.crit]; return !Number.isInteger(v) || v < 1 || v > 5; });
+      if (bad) bad.focus();
+      return;
+    }
     try {
       const res = await api('/api/court/rate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, reader: $('#rating-reader').value, sampleCode: $('#rating-sample').value, scores }) });
       // The confirmation must be set AFTER the re-render: renderCase()
@@ -1079,16 +1666,77 @@ function bindCaseEvents(c) {
       if (fresh) fresh.textContent = msg;
     } catch (err) { note.textContent = `Could not save the rating: ${err.message}`; }
   });
+  // H11 — version submission (Analysis tab).
+  const vf = $('#version-form');
+  if (vf) vf.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const note = $('#version-note');
+    const author = $('#version-author').value.trim();
+    const ingredients = parseVersionIngredients($('#version-ingredients').value);
+    const steps = $('#version-steps').value.split(/\n/).map((s) => s.trim()).filter(Boolean);
+    if (!author) { note.textContent = 'Author must not be empty.'; return; }
+    if (!Object.keys(ingredients).length) { note.textContent = 'Ingredients must list at least one “name: amount” line.'; return; }
+    try {
+      const res = await api('/api/court/version', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, author, ingredients, steps: steps.length ? steps : undefined, actor: 'Mara (owner)', actorKind: 'human' }) });
+      const msg = `Version submitted — ${author} is now coded sample ${res.sampleCode}. The mapping stays blind until the tally is complete.`;
+      await reloadCase(c); renderCase();
+      const fresh = $('#version-note');
+      if (fresh) fresh.textContent = msg;
+    } catch (err) { note.textContent = `Could not submit the version: ${err.message}`; }
+  });
+  // H12 — adopt as canonical (Negotiation tab, tally-complete only).
+  const adoptBtn = $('#adopt-btn');
+  if (adoptBtn) adoptBtn.addEventListener('click', async () => {
+    try {
+      await api('/api/court/adopt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, actor: 'Mara (owner)', actorKind: 'human' }) });
+      await reloadCase(c); renderCase();
+      const fresh = $('#adopt-note');
+      if (fresh) fresh.textContent = 'Canonical version adopted — recorded in the audit trail. The losing versions stay on the record as footnotes.';
+    } catch (err) {
+      const el = $('#adopt-note');
+      if (el) el.textContent = `Could not adopt: ${err.message}`;
+    }
+  });
   const ab = $('#approve-btn');
   if (ab) ab.addEventListener('click', () => openApproveModal(c));
   const rb = $('#reject-btn');
-  if (rb) rb.addEventListener('click', async () => {
-    try { await transition(c.id, 'REJECTED'); } catch (e) { showCaseError(e.message); }
+  // H10: reject is two-step like approve — a confirmation restating the
+  // terms being rejected, never a one-click state change.
+  if (rb) rb.addEventListener('click', () => openRejectModal(c));
+  // GAP-2: Submit for approval — the only UI path that creates a
+  // pending proposal. Disabled immediately on click so a double-click
+  // cannot fire twice (the server 400s a duplicate as the backstop);
+  // a failure shows the error and re-enables it, leaving the case
+  // unchanged. On success submitProposal re-fetches + re-renders and
+  // the Approve/Reject buttons replace this one.
+  const sb = $('#submit-btn');
+  if (sb) sb.addEventListener('click', async () => {
+    sb.disabled = true;
+    const err = $('#submit-error');
+    try {
+      const sel = (c.strategies || []).find((x) => x.id === selectedStrategy) || c.strategies[0];
+      await submitProposal(c, sel);
+    } catch (e) {
+      if (err) { err.textContent = e.message; err.hidden = false; }
+      sb.disabled = false;
+    }
+  });
+  const cb = $('#complete-btn');
+  // M18: completion needs no human gate (unchanged behaviour) — this
+  // is the visible "Mark completed" action after approval.
+  if (cb) cb.addEventListener('click', async () => {
+    try { await transition(c.id, 'COMPLETED'); } catch (e) { showCaseError(e.message); }
   });
   $$('[data-room-btn]', $('#view')).forEach((b) => b.addEventListener('click', () => openRoom(c.id)));
   $$('[data-verify]', $('#view')).forEach((b) => b.addEventListener('click', async () => {
     try {
       await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: b.dataset.verify, status: 'Verified', actor: 'Host', actorKind: 'human' }) });
+      await reloadCase(c); renderCase();
+    } catch (e) { showCaseError(e.message); }
+  }));
+  $$('[data-clarify]', $('#view')).forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await api('/api/correction/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, id: b.dataset.clarify, status: 'Clarified', actor: 'Host', actorKind: 'human' }) });
       await reloadCase(c); renderCase();
     } catch (e) { showCaseError(e.message); }
   }));
@@ -1106,16 +1754,28 @@ function setClaimLocal(caseId, claimId, status, challenge) {
   if (challenge) claimLocal[caseId][claimId].challenge = challenge;
 }
 function showChallengeForm(c, claimId) {
-  const slot = $('#challenge-slot');
+  // L7: the form opens in a row directly below the challenged claim,
+  // not below the whole table (below the fold on long tables).
+  $$('.challenge-row', $('#view')).forEach((r) => r.remove());
+  const row = $(`tr[data-claim="${claimId}"]`, $('#view'));
   const claim = (c.claims || []).find((cl) => cl.id === claimId);
-  slot.innerHTML = `<form class="challenge-form" id="challenge-form">
+  // M15: each evidence option names what the evidence says, not just its code.
+  const evOptions = (c.evidence || []).map((e) => `<option value="${esc(e.id)}">[${esc(e.id)}] ${esc(e.type)}${e.note ? ` — ${esc(e.note)}` : ''}</option>`).join('');
+  const formHtml = `<form class="challenge-form" id="challenge-form">
     <label class="visually-hidden" for="challenge-text">Correction for ${esc(claimId)}</label>
     <input id="challenge-text" placeholder="Correction for ${esc(claimId)} — e.g. “Survey was co-led with Dr Chen”" required>
-    <select id="challenge-ev" aria-label="Evidence to cite">${(c.evidence || []).map((e) => `<option value="${esc(e.id)}">[${esc(e.id)}] ${esc(e.type)}</option>`).join('')}<option value="">No evidence</option></select>
+    <select id="challenge-ev" aria-label="Evidence to cite">${evOptions}<option value="">No evidence</option></select>
     <button class="btn btn-sm" type="submit">Submit challenge as guest</button>
     <button class="ghost-btn btn-sm" type="button" id="challenge-cancel">Cancel</button>
   </form><p class="small muted">The guest challenges with evidence; the Verification Agent evaluates; the host approves. The original transcript is preserved.</p>`;
-  $('#challenge-cancel').addEventListener('click', () => { slot.innerHTML = ''; });
+  if (row) {
+    row.insertAdjacentHTML('afterend', `<tr class="challenge-row"><td colspan="5">${formHtml}</td></tr>`);
+  } else {
+    // Fallback: no matching row (e.g. Analysis tab) — render below the table.
+    const slot = $('#challenge-slot');
+    if (slot) slot.innerHTML = formHtml; else return;
+  }
+  $('#challenge-cancel').addEventListener('click', () => { $$('.challenge-row', $('#view')).forEach((r) => r.remove()); const s = $('#challenge-slot'); if (s) s.innerHTML = ''; });
   $('#challenge-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = $('#challenge-text').value.trim();
@@ -1159,8 +1819,15 @@ function closeModal() {
 function openApproveModal(c) {
   rememberFocus();
   const s = (c.strategies || []).find((x) => x.id === selectedStrategy) || c.strategies[0];
-  const terms = STRATEGY_TERMS[s.id] || { short: money(s.unitPrice) + ' / fl oz', full: money(s.unitPrice) + '/fl oz' };
+  const terms = termsForStrategy(s);
+  $('#modal-title').textContent = 'Confirm approval';
   $('#modal-terms').textContent = `I approve ${terms.full}. — Mara (owner), case ${c.id}`;
+  // H7: the financial consequences and the recommendation, from the
+  // already-computed strategy data — the owner signs with them in view.
+  $('#modal-impact').textContent = `Impact: ${strategyImpactLine(c, s)}`;
+  $('#modal-recommendation').textContent = `Recommendation: ${s.recommendation || '—'}`;
+  $('#modal-confirm').textContent = 'Approve these terms';
+  $('#modal-note').textContent = 'This records a human approval in the audit trail. Agents propose; only a human may approve.';
   $('#modal-error').hidden = true;
   $('#modal-backdrop').hidden = false;
   $('#modal-confirm').focus();
@@ -1173,12 +1840,9 @@ function openApproveModal(c) {
       const sameProposal = pending && PROPOSAL_TO_STRATEGY[pending.proposalId] === s.id;
       if (!sameProposal) {
         // Re-route the pending approval through the state machine so the
-        // recorded approval carries exactly these terms.
-        const cur0 = await api(`/api/cases/${c.id}`);
-        if (cur0.state === 'AWAITING_APPROVAL') await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'DISCUSSION', actor: 'Mara (owner)', actorKind: 'human' }) });
-        const cur = await api(`/api/cases/${c.id}`);
-        if (cur.state === 'DISCUSSION') await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'PROPOSAL', actor: 'Mara (owner)', actorKind: 'human' }) });
-        await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'AWAITING_APPROVAL', actor: 'Mara (owner)', actorKind: 'human', proposalId: s.id, terms: terms.full }) });
+        // recorded approval carries exactly these terms (GAP-2: shared
+        // submitProposal helper with the canonical P-number proposalId).
+        await submitProposal(c, s, true);
       }
       await api(`/api/cases/${c.id}/transition`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'APPROVED', actor: 'Mara (owner)', actorKind: 'human' }) });
       closeModal();
@@ -1186,6 +1850,35 @@ function openApproveModal(c) {
       cases = await api('/api/cases');
       currentTab = 'audit';
       render();
+    } catch (e) {
+      const err = $('#modal-error'); err.textContent = e.message; err.hidden = false;
+    } finally { btn.disabled = false; }
+  };
+}
+// H10 (remediation 2026-11-06): reject mirrors the approve pattern —
+// a two-step confirmation restating the terms being rejected, in the
+// same dialog. The rejected terms are recorded by the engine
+// (rejectedTerms) and surfaced in the Approvals panel + audit (M20).
+function openRejectModal(c) {
+  rememberFocus();
+  const s = (c.strategies || []).find((x) => x.id === selectedStrategy) || c.strategies[0];
+  const terms = c.pendingApproval?.terms
+    || (STRATEGY_TERMS[s.id]?.full) || 'pending terms';
+  $('#modal-title').textContent = 'Confirm rejection';
+  $('#modal-terms').textContent = `I reject ${terms}. — Mara (owner), case ${c.id}`;
+  $('#modal-impact').textContent = `Impact if rejected: ${strategyImpactLine(c, s)} — the supplier's ${money(c.input.newPrice)} proposal stays unresolved; the case moves to REJECTED and the rejected terms are recorded in the audit trail.`;
+  $('#modal-recommendation').textContent = `Recommendation: ${s.recommendation || '—'}`;
+  $('#modal-confirm').textContent = 'Reject these terms';
+  $('#modal-note').textContent = 'This records a human rejection in the audit trail. The rejected terms stay on the record.';
+  $('#modal-error').hidden = true;
+  $('#modal-backdrop').hidden = false;
+  $('#modal-confirm').focus();
+  $('#modal-confirm').onclick = async () => {
+    const btn = $('#modal-confirm');
+    btn.disabled = true;
+    try {
+      await transition(c.id, 'REJECTED');
+      closeModal();
     } catch (e) {
       const err = $('#modal-error'); err.textContent = e.message; err.hidden = false;
     } finally { btn.disabled = false; }
@@ -1212,19 +1905,30 @@ function closeRoom() {
   restoreFocus();
 }
 $('#room-drawer').addEventListener('keydown', (e) => trapTab($('#room-drawer'), e));
-function renderRoom() {
-  const c = details[roomCaseId]; if (!c) return;
+// M21 (2026-11-06): the drawer shows the room's message timeline —
+// live Switch messages in real mode (GET /api/switch/messages), the
+// app-stored transcript in stub mode. The mandate box that used to sit
+// here duplicated the rail; it is gone. The empty state renders only
+// when the room truly has no messages.
+async function renderRoom() {
+  const caseId = roomCaseId;
+  const c = details[caseId]; if (!c) return;
   $('#drawer-title').textContent = `Room ${c.switchRoom}`;
   $('#drawer-sub').textContent = `${c.id} — ${c.title} · ${(c.participants || []).map((p) => p.name).join(', ')}`;
-  const m = $('#drawer-mandate');
-  if (c.workflow === 'HAGGLE') {
-    m.hidden = false;
-    m.innerHTML = `<div class="mandate-title">Mandate — owner</div>Target <b>${money(c.input.targetPrice)}</b> · Max <b>${money(c.input.maxApprovedPrice)}</b> · Walk away &gt; <b>${money(c.input.maxApprovedPrice)}</b>`;
-  } else m.hidden = true;
-  const msgs = c.messages || [];
-  $('#room-log').innerHTML = msgs.length
-    ? msgs.map((msg) => `<div class="room-msg"><div class="rm-head"><b>${esc(msg.author)}</b> · ${fmtTime(msg.at)} ${/agent/i.test(msg.author) ? '<span class="agent-tag">AGENT</span>' : ''}</div>${esc(msg.text)}</div>`).join('')
-    : '<p class="empty">No messages yet in this room. Post below — ' + (statusData?.switchMode === 'REAL-SWITCH' ? 'it goes to the live Switch room (real Mattermost channel) and is logged in the audit trail.' : statusData?.switchMode === 'SWITCH-UNREACHABLE' ? 'the Switch server is currently unreachable, so the message will not be delivered. Check the server and retry.' : 'it goes to the SIMULATED stub transcript and is logged in the audit trail.') + '</p>';
+  let msgs = c.messages || [];
+  let notice = '';
+  try {
+    const r = await api(`/api/switch/messages?caseId=${encodeURIComponent(c.id)}`);
+    if (roomCaseId !== caseId) return; // drawer moved on while loading
+    msgs = r.messages || [];
+    if (r.error) notice = `<p class="inline-error">${esc(r.error)} Showing stored messages.</p>`;
+  } catch (e) {
+    if (roomCaseId !== caseId) return;
+    notice = `<p class="inline-error">Could not load the room timeline (${esc(e.message)}). Showing stored messages.</p>`;
+  }
+  $('#room-log').innerHTML = notice + (msgs.length
+    ? msgs.map((msg) => `<div class="room-msg"><div class="rm-head"><b>${esc(msg.author)}</b> · ${msg.at ? fmtTime(msg.at) : '—'} ${/agent/i.test(msg.author) ? '<span class="agent-tag">AGENT</span>' : ''}${msg.localOnly ? ' <span class="muted small">(stored locally — not in the live room)</span>' : ''}</div>${esc(msg.text)}</div>`).join('')
+    : '<p class="empty">No messages yet in this room. Post below — ' + (statusData?.switchMode === 'REAL-SWITCH' ? 'it goes to the live Switch room (real Mattermost channel) and is logged in the audit trail.' : statusData?.switchMode === 'SWITCH-UNREACHABLE' ? 'the Switch server is currently unreachable, so the message will not be delivered. Check the server and retry.' : 'it goes to the SIMULATED stub transcript and is logged in the audit trail.') + '</p>');
 }
 $('#drawer-close').addEventListener('click', closeRoom);
 $('#drawer-backdrop').addEventListener('click', closeRoom);
@@ -1236,12 +1940,19 @@ $('#room-form').addEventListener('submit', async (e) => {
     await api('/api/switch/post', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id, room: c.switchRoom, author: 'Mara (owner)', text }) });
     $('#room-text').value = '';
     details[c.id] = await api(`/api/cases/${c.id}`);
+    // GAP-2 staleness: the post adds a message + audit event to the
+    // case, so re-render the case view behind the drawer — otherwise
+    // the audit tab still shows the pre-post state when the drawer
+    // closes, until the next tab switch or reload. The drawer itself
+    // is outside #view, so this render does not disturb it or its focus.
+    render();
     renderRoom();
   } catch (err) { $('#room-log').insertAdjacentHTML('beforeend', `<p class="inline-error">${esc(err.message)}</p>`); }
 });
 
 // ---------- nav / search / boot ----------
 $$('.nav-item').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+$('#switch-recheck').addEventListener('click', recheckSwitch);
 $('#search').addEventListener('input', (e) => {
   searchQuery = e.target.value;
   if (currentCaseId || (view !== 'overview' && view !== 'cases')) setView('cases');
@@ -1258,11 +1969,18 @@ document.addEventListener('keydown', (e) => {
 (async function boot() {
   try {
     await loadAll();
+    // Hash route first; the legacy ?case=…&tab=… URL still works and is
+    // rewritten to its hash form.
     const params = new URLSearchParams(location.search);
     const deep = params.get('case');
-    const tab = params.get('tab');
-    if (tab && ['overview', 'analysis', 'negotiation', 'evidence', 'audit'].includes(tab)) currentTab = tab;
-    if (deep && details[deep]) openCase(deep, currentTab); else render();
+    if (deep) {
+      // NEW-1: openCase resolves on demand — a ?case= link to a case
+      // created after boot no longer falls through to the dashboard.
+      const tab = params.get('tab');
+      openCase(deep, CASE_TABS.includes(tab) ? tab : 'overview');
+    } else if (!(await applyRoute(parseHash()))) {
+      render();
+    }
   } catch (e) {
     $('#view').innerHTML = `<section class="panel"><h2>Could not load CONVERGE</h2><p>${esc(e.message)}</p><p class="small muted">Is the server running? <span class="num">npm start</span> (port 3000).</p></section>`;
   }

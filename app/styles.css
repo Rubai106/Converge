@@ -71,7 +71,18 @@ input,select,textarea{font:inherit;color:var(--ink)}
 .panel h3:first-child{margin-top:0}
 .section-title{font-size:15px;font-weight:600;margin:0 0 4px}
 .section-sub{color:var(--soft);font-size:12px;margin-bottom:14px}
-.table-wrap{overflow-x:auto;margin:0 -16px;padding:0 16px}
+.table-wrap{overflow-x:auto;margin:0 -16px;padding:0 16px;
+  /* H4/L13/L15: scroll shadow — a right-edge fade appears only while
+     there is more table to the right (background-attachment: local vs
+     scroll). No fade when the table fits, so the cue never lies. */
+  background-image:linear-gradient(to right,#fff,#fff),linear-gradient(to right,#fff,#fff),
+    linear-gradient(to right,rgba(15,27,45,.16),rgba(15,27,45,0)),
+    linear-gradient(to left,rgba(15,27,45,.16),rgba(15,27,45,0));
+  background-position:left center,right center,left center,right center;
+  background-repeat:no-repeat;
+  background-size:22px 100%,22px 100%,14px 100%,14px 100%;
+  background-attachment:local,local,scroll,scroll}
+.claims-table{min-width:560px} /* L16: Claim column gets room when scrolled */
 table{width:100%;border-collapse:collapse;font-size:12px}
 caption{text-align:left;font-size:11px;color:var(--soft);padding-bottom:6px}
 th,td{padding:7px 8px;border-bottom:1px solid var(--line-soft);text-align:left;vertical-align:top}
@@ -85,6 +96,11 @@ tbody tr.clickable{cursor:pointer}
 tbody tr.clickable:hover td{background:#F7F9FA}
 tbody tr.sel td{background:var(--teal-bg)}
 tbody tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--teal)}
+/* L11: the selected strategy row's text sat flush against the left edge
+   (first-column padding is 0 by design); restore its padding. */
+tbody tr.sel td:first-child{padding-left:8px}
+.switch-note{margin:8px 20px 0;padding:8px 10px;background:var(--amber-bg);color:#6E5700;
+  font-size:12px;border-radius:4px}
 .btn{background:var(--teal);color:#fff;border:0;border-radius:4px;padding:10px 16px;font-weight:600}
 .btn:hover{background:var(--teal-dark)}
 .btn:disabled{background:#8CA39E;cursor:not-allowed}
@@ -96,6 +112,7 @@ tbody tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--teal)}
 .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap}
 .pill-amber{background:var(--amber-bg);color:#6E5700} /* --amber #8A6D00 on #FFF3CD is 4.44:1 (AA fail); #6E5700 is ~5.2:1 (QA 2026-11-06) */
 .pill-teal{background:var(--teal-bg);color:var(--teal-dark)}
+.pill-blue{background:#DCE8F5;color:#1D4E89} /* COMPLETED only — distinct from APPROVED teal (M20) */
 .pill-red{background:var(--red-bg);color:var(--red)}
 .pill-grey{background:#E8EDF1;color:var(--soft)}
 .tag-ev{font-family:var(--mono);font-size:11px;color:var(--teal-dark);background:var(--teal-bg);
@@ -126,12 +143,21 @@ tbody tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--teal)}
 .case-head h1{font-size:18px}
 .case-head .case-meta{color:var(--soft);font-size:12px;margin-top:3px}
 .stepper{display:flex;gap:0;margin:0 0 12px;list-style:none;padding:0}
-.stepper li{flex:1;text-align:center;font-size:11px;font-weight:500;padding:7px 2px;
+.stepper li{flex:1;min-width:0;text-align:center;font-size:11px;font-weight:500;padding:7px 2px;
   border-bottom:2px solid var(--line);color:var(--soft)}
 .stepper li.done{border-color:var(--teal);color:var(--teal-dark)}
 .stepper li.current{border-color:var(--amber);color:var(--amber);font-weight:700}
 .stepper li.blocked{border-color:var(--red);color:var(--red);font-weight:700}
-.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:12px;overflow-x:auto}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:12px;overflow-x:auto;
+  /* L11: same scroll-shadow cue as .table-wrap, for the tab row.
+     Cover gradients match the page background the tabs sit on. */
+  background-image:linear-gradient(to right,#F4F6F8,#F4F6F8),linear-gradient(to right,#F4F6F8,#F4F6F8),
+    linear-gradient(to right,rgba(15,27,45,.16),rgba(15,27,45,0)),
+    linear-gradient(to left,rgba(15,27,45,.16),rgba(15,27,45,0));
+  background-position:left center,right center,left center,right center;
+  background-repeat:no-repeat;
+  background-size:22px 100%,22px 100%,12px 100%,12px 100%;
+  background-attachment:local,local,scroll,scroll}
 .tab{border:0;background:transparent;padding:9px 13px;font-weight:600;color:var(--soft);
   border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
 .tab:hover{color:var(--ink)}
@@ -154,6 +180,10 @@ tbody tr.sel td:first-child{box-shadow:inset 2px 0 0 var(--teal)}
 .bullet .bullet-old{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--soft)}
 .bullet-scale{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);
   font-family:var(--mono);margin-top:4px}
+.delta-col{white-space:normal;min-width:24px}
+.bullet-legend{display:flex;gap:14px;font-size:11px;color:var(--soft);margin-top:4px}
+.bullet-legend .legend-old{color:var(--soft);font-weight:700}
+.bullet-legend .legend-target{color:var(--ink);font-weight:700}
 .mandate-box{border:1px solid #E3D3A8;background:#FDF8E7;border-radius:4px;padding:10px 12px;font-size:12px}
 .mandate-box b{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .mandate-box .mandate-title{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
@@ -206,7 +236,6 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
   font-size:11px;font-weight:700;letter-spacing:.03em;border-radius:4px}
 .sim-label.live-label{background:#e6f4f1;color:#0A5C50} /* was #0e7c6b = 4.52:1 (AA-barely); #0A5C50 = 6.98:1 (night hardening 2026-11-06) */
 .sim-label.warn-label{background:var(--amber-bg);color:#6E5700}
-.drawer .mandate-box{margin:0 16px 10px}
 .room-log{flex:1;overflow-y:auto;padding:4px 16px 12px}
 .room-msg{padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:13px}
 .room-msg .rm-head{font-size:11px;color:var(--soft);margin-bottom:2px}
@@ -219,6 +248,8 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
 .modal h2{font-size:16px;margin-bottom:10px}
 .modal-terms{font-family:var(--mono);font-size:14px;background:var(--teal-bg);
   border-radius:4px;padding:12px;margin:0 0 10px}
+.modal-impact{font-size:13px;margin-top:8px}
+.modal-recommendation{font-size:12px;color:var(--soft);margin-top:6px}
 .modal-note{font-size:12px;color:var(--soft)}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 .modal-error{color:var(--red);font-size:12px;margin-top:10px}
@@ -248,8 +279,24 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 #C98A1B}
     border-radius:4px;padding:10px;z-index:20}
   .hero{font-size:22px}
 }
+@media (max-width:720px){
+  /* H4: prioritised columns at narrow widths — STAGE stays, OWNER goes
+     (UPDATED was dropped outright, M5). */
+  .col-owner{display:none}
+}
 @media (max-width:480px){
   .kpi b{font-size:18px}
+  /* H3: shrink the bottom nav so all 7 items fit without scrolling —
+     shared width, minimal side padding, smaller type. */
+  .bottomnav{padding:4px 2px calc(4px + env(safe-area-inset-bottom))}
+  .bottomnav .nav-item{flex:1 1 0;min-width:0;justify-content:center;padding:10px 2px;font-size:11px}
+  /* L14: primary touch targets to the 44px guideline. */
+  .btn,.ghost-btn{min-height:44px}
+  .move-to select{min-height:44px}
+  .search-wrap input{min-height:44px}
+  /* L17: smaller step labels so "Awaiting approval" fits on one line. */
+  .stepper li{font-size:10px;padding:7px 1px;white-space:nowrap}
+  .switch-note{margin:8px 14px 0}
   /* Night hardening 2026-11-06: the 140px search truncated its own
      placeholder ("Search cases, evidence… ⌘K"). On a phone the search
      takes its own full-width row instead of a cramped fixed width. */

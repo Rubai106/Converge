@@ -139,6 +139,36 @@ export async function withRoomConnection(baseUrl, apiKey, agentId, roomId, fn) {
   }
 }
 
+// Map a read_context result ({result:{threads:[{root, replies}]}}) to a
+// flat message timeline, oldest first. Only kind === 'message' events are
+// messages — room_join / system events are dropped. Pure, so the server
+// tests can exercise it directly (M21, 2026-11-06).
+export function switchTimelineToMessages(readResult) {
+  const threads = readResult?.result?.threads || readResult?.threads || [];
+  const out = [];
+  for (const t of threads) {
+    for (const ev of [t?.root, ...(t?.replies || [])]) {
+      if (!ev || ev.kind !== 'message') continue;
+      out.push({
+        id: ev.id,
+        author: ev.sender_name || ev.sender || 'unknown',
+        at: ev.timestamp ? new Date(ev.timestamp).toISOString() : null,
+        text: ev.body || '',
+        real: true,
+        eventId: ev.id,
+      });
+    }
+  }
+  // Undated messages (no timestamp) sort last, never first — an empty
+  // sort key would put them before every dated message.
+  out.sort((a, b) => {
+    if (!a.at) return 1;
+    if (!b.at) return -1;
+    return a.at.localeCompare(b.at);
+  });
+  return out;
+}
+
 export function agentProfile(name, description) {
   return {
     name, description, connector_type: 'converge',
