@@ -282,6 +282,43 @@ function validateRatingScores(scores) {
 }
 async function reloadCase(c) { details[c.id] = await api(`/api/cases/${c.id}`); }
 
+// STALENESS fix (2026-11-06): a case changed server-side outside this
+// tab (another tab, a direct API call, another user) used to stay stale
+// until reload — the client fetched the detail once and cached it in
+// `details`. On returning to the tab (visibilitychange -> visible) and
+// on window focus, re-fetch the open case and re-render only if the
+// server detail actually differs, so a focus event with no server change
+// is a silent no-op. No interval polling. Skipped while a case route is
+// loading, while the approval modal is open, or while the user is typing
+// in a form, so a refresh never wipes in-progress input; a failed check
+// leaves the cached view in place and retries on the next event.
+let refreshingCase = false;
+async function refreshOpenCase() {
+  if (refreshingCase) return;
+  const id = currentCaseId;
+  if (!id || !details[id] || routeState) return;
+  const modal = document.querySelector('#modal-backdrop');
+  if (modal && !modal.hidden) return;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
+  refreshingCase = true;
+  try {
+    const fresh = await api(`/api/cases/${encodeURIComponent(id)}`);
+    if (currentCaseId !== id || !details[id]) return;
+    if (JSON.stringify(fresh) !== JSON.stringify(details[id])) {
+      details[id] = fresh;
+      const row = cases.find((c) => c.id === id);
+      if (row) row.state = fresh.state;
+      render();
+      if (roomCaseId === id) renderRoom();
+    }
+  } catch (e) {
+    // Keep the cached view; the next focus/visibility event retries.
+  } finally {
+    refreshingCase = false;
+  }
+}
+
 // ---------- data loading ----------
 async function loadAll() {
   statusData = await api('/api/status');
@@ -489,6 +526,11 @@ window.addEventListener('hashchange', () => {
   } else if (!currentCaseId && route.view === view) return;
   applyRoute(route);
 });
+// STALENESS fix (2026-11-06): refresh the open case when the user
+// returns to the tab or the window regains focus — see refreshOpenCase
+// above. No interval polling.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshOpenCase(); });
+window.addEventListener('focus', refreshOpenCase);
 
 // ---------- Switch status + re-probe (H6) ----------
 // When Switch is unreachable there is a "Recheck connection" button

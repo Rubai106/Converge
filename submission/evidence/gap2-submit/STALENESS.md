@@ -2,20 +2,43 @@
 
 ## Verdict
 
-Two distinct staleness behaviours, one fixed in this round, one reproduced
-and deferred:
+Two distinct staleness behaviours, one fixed in the GAP-2 round, one
+fixed in this round:
 
-1. **FIXED (this round, GAP-2 refresh path):** after any mutation made
+1. **FIXED (GAP-2 round, refresh path):** after any mutation made
    *through the UI*, the client now re-fetches the case detail and
    re-renders, so the UI never shows an outdated workflow state after an
    action it performed. Covered by `tests/gap2-submit.test.js`
    ("staleness guards") and `tests/gap2-journey.test.js` (journey +
    drawer-post test).
-2. **REPRODUCED, NOT FIXED (external mutations):** a case detail that
-   changes *server-side outside the UI* — another tab, a direct API call,
-   another user — still shows stale in an open tab until reload. This is
-   a different path (no polling / no cross-tab sync) and is out of the
-   GAP-2 scope; see "Proposed narrow fix" below.
+2. **FIXED (2026-11-06, `refreshOpenCase`, commit pending):** a case
+   detail that changes *server-side outside the UI* — another tab, a
+   direct API call, another user — now refreshes when the user returns
+   to the tab or the window regains focus. See "Fix" below. The
+   remaining honest limit: a tab that stays in the foreground while
+   another actor mutates the open case does not update until the next
+   focus/visibility event — there is still no interval polling and no
+   cross-tab push, by design.
+
+## Fix (2026-11-06) — `refreshOpenCase` in `app/app.js`
+
+On `visibilitychange` to `visible` and on `window` `focus`, the client
+re-fetches `GET /api/cases/:id` for the open case only and re-renders
+only if the returned detail actually differs from the cached one
+(full-JSON comparison; the endpoint is deterministic, verified by
+fetching the same case twice). A focus event with no server change is a
+silent no-op. The check is skipped while a case route is loading, while
+the approval modal is open, or while the user is typing in a form, so a
+refresh never wipes in-progress input; a failed check leaves the cached
+view in place and retries on the next event. The case-list row's state
+is updated too, and the room drawer timeline refreshes if it is open on
+the same case. No interval polling.
+
+Verified by `tests/staleness-refresh.test.js` (5 tests: 3 static, 2 live
+Playwright against a scratch server): the exact reproduction above now
+shows PROPOSAL after a focus event with no reload (a window flag proves
+no reload), the same via visibilitychange, and a no-change focus leaves
+the view untouched. Full suite 156/156, `npm run check` clean.
 
 ## What the client does after each UI mutation (verified in code)
 
@@ -56,28 +79,19 @@ both needed a re-fetch after their own mutation). Those are fixed. The
 remaining case is changes the open tab never made — a different code
 path (a refresh trigger, not a post-mutation re-fetch).
 
-## Proposed narrow fix (not implemented in this round)
+## Proposed narrow fix — IMPLEMENTED 2026-11-06 (see "Fix" above)
 
-Add a lightweight freshness check on the case view, scoped to the open
-case only:
-
-- On `visibilitychange` to `visible` (user returns to the tab) and on
-  `focus`, re-fetch `GET /api/cases/:id` and re-render if the returned
-  `audit.length` (or a server-provided revision/updatedAt) differs from
-  the cached detail's. No interval polling — the demo is a single-user
-  walkthrough and a 5–10s poll would add load and noise.
-- Alternatively, expose a server `revision` counter on the case and have
-  the client compare it on the same triggers.
-
-Estimated scope: one small client change + one test (open a case, mutate
-via API, switch away and back, assert the UI shows the new state).
-Do not bundle it with the GAP-2 submit flow; it touches the same
-`details` cache, so it should land as its own commit with its own
-Playwright test.
+The fix follows this proposal exactly: a freshness check on the case
+view, scoped to the open case only, on `visibilitychange` to `visible`
+and on `focus`, re-fetching `GET /api/cases/:id` and re-rendering if
+the returned detail differs from the cached one. No interval polling.
+It landed as its own commit with its own Playwright test
+(`tests/staleness-refresh.test.js`).
 
 ## Demo impact
 
 None for the scripted demo: the presenter drives every change through
-the UI, and every UI mutation now re-fetches and re-renders. The stale
-state can only appear if a second actor (or a direct API call) mutates
-the open case mid-demo — which the demo script does not do.
+the UI, and every UI mutation now re-fetches and re-renders. If a
+second actor (or a direct API call) mutates the open case mid-demo,
+the view now refreshes the next time the tab regains focus — the stale
+state no longer survives until a reload.
