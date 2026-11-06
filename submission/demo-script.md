@@ -7,8 +7,7 @@ the owner approval in the demo is a real approval posted in the real
 Mattermost room and recorded by CONVERGE.
 
 ## 0:00–0:20 — The problem
-"Your supplier just raised cream by 50%. What does that do to your menu —
-and what do you say back?" Show the dashboard: 3 cases, HAG-014 completed.
+Open with the positioning line, on camera: "Most collaboration tools help people communicate. CONVERGE helps them reach an accountable decision." Then the problem: "Your supplier just raised cream by 50%. What does that do to your menu — and what do you say back?" Show the dashboard: 3 cases, HAG-014 completed. Name the engine once: Intake → Evidence → Conflict → Proposal → Human approval → Audited resolution — the same six stages in every workflow.
 
 ## 0:20–1:05 — HAGGLE (HAG-014)
 1. Open HAG-014 — DairyCo cream $0.16 → $0.24/fl oz.
@@ -29,6 +28,7 @@ and what do you say back?" Show the dashboard: 3 cases, HAG-014 completed.
    and will be re-checked next month.
 
 ## 1:35–2:10 — COURT + CORRECTION (20s each)
+Say the framing line first: "Same engine, a completely different kind of disagreement — that is the point. HAGGLE is the business product; these two prove the engine generalises."
 6. COURT (CRT-007): ragù conflict table — salt/fat/simmer conflict,
    tomato agrees. Blind test-cook, independent ratings, disagreement
    flagged, canonical recipe with the dissent preserved.
@@ -39,8 +39,12 @@ and what do you say back?" Show the dashboard: 3 cases, HAG-014 completed.
 ## 2:10–2:30 — Why Switch, why CONVERGE
 8. "Without Switch there is no shared room — no multi-party work, no
    approval in chat, no audit trail. The engine is shared; the maths is
-   deterministic; the human decides." Show the README limitations slide
-   (simulated supplier, family panel is deliberation not statistics).
+   deterministic; the human decides." Add the return line: "And the record
+   accrues — the agreed price is filed and re-checked next month." Show the
+   README limitations slide (simulated supplier, family panel is deliberation
+   not statistics). If asked about novelty, use the careful phrasing: "Our
+   research did not identify a single product combining the complete
+   workflow" — never "no such product exists anywhere".
 
 ## Recording notes
 - The video is `submission/demo/converge-demo.mp4` (147.8s, 1440×900,
@@ -61,7 +65,9 @@ and what do you say back?" Show the dashboard: 3 cases, HAG-014 completed.
   the rooms were recreated; the current rooms carry a record note instead
   of the original approval post. The video was NOT re-recorded: the
   section-title burn-in step is not scripted, and re-recording without
-  the titles would be a worse artefact than the two stale frames.
+  the titles would be a worse artefact than the two stale frames. The
+  recommendation (retain the original, disclose in writing) is recorded
+  in `docs/positioning.md` §7; the original must not be destroyed.
 - Step 4 above describes the first stack's room. In the current room the
   owner's original approval post is replaced by a record note stating the
   approval happened in the original room on 2026-11-06 and was preserved

@@ -13,7 +13,8 @@ Repo (canonical): https://github.com/Rubai106/accordweave (public, main)
 - [x] Premium Direction B UI built and verified (screenshots read clean)
 - [x] README, architecture, setup guide, demo script, PROGRESS.md
 - [x] Competitor validation + Switch protocol notes + UI/UX directions (3)
-- [x] Official GitHub repo connected; pushes verified on GitHub (a50f5a7, 4e72071, ac9caef, c4305f5, 1a8cc21 — 43 files incl. Switch evidence and the full QA report)
+- [x] Official GitHub repo connected; pushes verified on GitHub (a50f5a7, 4e72071, ac9caef, c4305f5, 1a8cc21, 65f641d — night hardening incl. Switch rebuild + COURT blindness + QA report addendum)
+- [x] Final differentiation & positioning (2026-11-06): deep competitor research pass (see `docs/competitor-validation.md` for the per-source evidence), `docs/competitor-validation.md` rewritten with two-pass provenance, `docs/positioning.md` added (honest evaluation, target users, Switch centrality, judge estimate 38/50, risks, demo-video recommendation: retain), README + demo script revised (one-engine positioning, HAGGLE flagship / COURT proof / CORRECTION supporting)
 - [x] App screenshots captured locally — 4 premium submission assets in submission/screenshots/ (see its README); 3 temp-UI shots archived, not for submission
 
 ## Still needed
@@ -26,6 +27,8 @@ Repo (canonical): https://github.com/Rubai106/accordweave (public, main)
 ## Do not include
 - Fake Switch screenshots (stub shots must be captioned SIMULATED)
 - Fake Wispr screenshot or invented usage numbers
-- Sofra / Happi Happi as competitors (not found)
-- "First ever" claims (see docs/competitor-validation.md)
+- Sofra / Happi Happi as competitors (not found); Cupi (unverified — only an Instagram ad found)
+- ChefHero as a current product (rebranded as Notch) or Podcastle as a current name (rebranded as Async); SmartSensory as one product; Factmata as a current product (acquired by Cision, 2022)
+- "First ever" claims, or "no such product exists anywhere" — use the careful phrasing: "our research did not identify a single product combining the complete workflow" (see docs/competitor-validation.md)
+- Market-size statistics (none is sourced in either research pass)
 - The Oct 30 PayCheckpoint draft deck or any other project's artifacts
