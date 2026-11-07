@@ -326,3 +326,310 @@ the LLM env) is a remaining step — see
   `CONVERGE_LLM_*` variables are documented in `docs/SETUP.md` §7
   and `docs/AGENT-RUNTIME.md` but are not yet listed in
   `.env.example`.
+
+## ~02:00–02:45 Dhaka — §31 security + audit work
+
+The master-prompt window's "What was not done" list (§31 of the
+brief) is the work for this round: the audit hash chain, stable
+claim ids, the outstanding security improvements, and the security
+reporting. No new features, no redesign, no draft-endpoint changes
+(another agent owns `server/drafts.js` and the draft endpoints).
+
+### §31.1 Audit-trail hash chain — done
+
+- Every audit event now carries `prevHash` + `hash` = SHA-256 of
+  the canonical serialisation of (prevHash + the event's own
+  fields). `audit()` chains every new event; `verifyAuditChain`
+  detects a modified event, a missing middle event, reordered
+  events, and an invalid previous hash.
+- Migration: old events are NEVER rewritten. A single
+  `chain-baseline` event commits to all pre-existing events (its
+  hash is SHA-256 of the canonical serialisation of the
+  pre-existing array); new events chain from it. The baseline is
+  established by `store.js load()` and by `audit()` itself
+  (idempotent, a no-op once a baseline exists).
+- PLACEMENT: the brief said store.js, but `audit()` lives in
+  engine.js (not store.js) and the chain reuses engine.js
+  `canonicalJson`/`sha256Hex` — so the helpers live in engine.js
+  next to `audit()`, and store.js `load()` imports
+  `ensureAuditBaseline` from engine.js. engine.js does NOT import
+  store.js.
+- INCIDENT (recovered, no data lost): the first implementation had
+  engine.js import store.js. A test that statically imported the
+  engine and then dynamically imported the store with a scratch
+  `CONVERGE_DATA_FILE` evaluated the store BEFORE the env var was
+  set — so its `load()` read and baselined the PRODUCTION
+  `data/converge.json` (one baseline event appended to each of
+  HAG-014, CRT-007, COR-003; hash changed f3a08d2e → 1c7440b1).
+  The production file was restored byte-for-byte from the
+  2026-11-07-0016 recovery backup (`cp --reflink=never`, inode
+  differs, SHA-256 `f3a08d2e080f26fc` verified, all legacy events
+  and the $0.19 approval confirmed identical), the `.bak.1` was
+  re-synced to the restored file, and the import direction was
+  fixed. The production app was NOT restarted and its in-memory
+  data was the pre-migration version throughout, so the restore
+  is consistent with the running server.
+- LIMITATIONS (also in `docs/SECURITY.md` §2b): tamper evidence,
+  not tamper-proof storage. No external checkpoint; tail deletion
+  still verifies.
+- Tests: `tests/hash-chain.test.js` (9 tests, incl. the
+  tail-deletion limitation pinned as a test).
+
+### §31.2 Stable CORRECTION claim identifiers — done
+
+- Claim ids are `C-` + 8 hex chars of SHA-256 of the normalised
+  claim text (`stableClaimId`). A reorder keeps every claim's id
+  and status; a wording change is a new claim and the old status
+  is orphaned, never rebound. Legacy positional ids are carried
+  as `legacyId` and the endpoint accepts both.
+- Migration (`migrateCorrectionClaimKeys`): stored
+  claimStatuses/claimChallenges/claimChallengeHistory are re-keyed
+  legacy → stable by current transcript position; unmapped keys
+  are preserved as `orphanedClaim*` and reported in the case
+  detail response and in a 404 with `orphaned: true`. ASSUMPTION:
+  correct only if the transcript has not changed since the
+  statuses were set — true for production COR-003 (seed
+  transcript). After migration all keys are stable ids.
+- Client: the transcript view matches sentences by text (not
+  position); the activity feed resolves audit claim references by
+  stable or legacy id. The claims table already used `cl.id`.
+- The `draft_correction_assessment` tool's claim projection now
+  includes `legacyId` and resolves status by stable id first,
+  then legacy id (same rule as the server).
+- Tests: `tests/claim-ids.test.js` (6 tests); endpoint behaviour
+  in `tests/security.test.js`. Existing tests that asserted C1/C2/C3
+  were updated (server, remediation-appwide, visual-polish, tools).
+
+### §31.3 Security improvements — done (with two honest non-results)
+
+- **CSRF Origin check + explicit CORS: already implemented in P0,
+  now verified.** The code already had `allowedOrigin` /
+  `applyCorsHeaders` and the cross-origin POST 403 — the SECURITY.md
+  claim that they did not exist was stale. They were NOT rebuilt;
+  they are now pinned by tests (cross-origin + valid token → 403;
+  no Origin → proceeds; app origin → proceeds; allowed origin
+  gets ACAO, disallowed gets none, preflight 204). The correct
+  mitigation for this architecture: the token travels as a custom
+  header (not a cookie), so classic cookie-CSRF does not apply,
+  and the Origin check is defence in depth.
+- **Session revocation: done.** `POST /api/session/revoke`
+  (requires a valid token) invalidates that token immediately;
+  the next mutation with it gets 401. Log out button in the
+  header calls it and clears the cached token. New helpers live in
+  `server/security.js` (`revokeSession`, `sanitizePublicError`);
+  the sessions Map stays in server.js (moving it would have been
+  a restructure the brief forbade).
+- **Error leakage: done.** The one leak — `/api/switch/messages`
+  interpolated raw Switch error text — now returns a generic
+  message. The outer catch was already generic.
+- **File uploads: N/A.** No upload surface exists (verified by a
+  test); no validation built for a feature that does not exist.
+- **Cross-case isolation: verified by test.** A COR-003 claim id
+  cannot resolve against HAG-014 (404); a COR-003 status change
+  leaves HAG-014 byte-identical.
+- **Live XSS probe: done and passing.** Benign payloads in a
+  scratch case's supplier/ingredient fields did NOT execute in a
+  real browser (no live element, payload visible escaped, 0
+  console errors). Pinned as `tests/xss-probe.test.js`. The probe
+  ran against a scratch instance (same code as production) so it
+  never mutated the production data file. The earlier "blocked by
+  a platform safety filter" outcome did NOT recur here.
+- **axe-core: done and in the suite.** axe-core 4.14.0 is a
+  devDependency; `tests/axe.test.js` runs it in a real browser on
+  the dashboard, HAG-014 overview, and COR-003 negotiation: **0
+  violations**. axe.js is served from the app's own origin via
+  route interception — the strict CSP is NOT weakened. The run
+  found two real bugs, both fixed: (1) clickable rows carried an
+  `aria-label` override failing WCAG 2.5.3
+  (label-content-name-mismatch) — the name now comes from the
+  row's visible content (the two pinning tests were updated with
+  the reason); (2) breadcrumb links had no underline and 1.84:1
+  contrast (link-in-text-block) — now underlined by default.
+- **`.env.example`: done.** Empty `CONVERGE_LLM_*` placeholders
+  added (§29.2).
+- **NOT verified (honest): `npm audit` could NOT run.** The
+  registry proxy denies the audit endpoint (403 policy_denied),
+  same as before. Dependencies are NOT claimed clean. Re-run
+  outside the sandbox.
+
+### §31.4 Security reporting — done
+
+`docs/SECURITY.md` rewritten for the §31 state: fixed issues (§2b),
+partially fixed (R2 — Origin check, no CSRF token), unresolved
+risks (R1 single identity, R10 npm audit unverified, R11 no
+per-user auth, R12 the production app still runs pre-§31 server
+code), demonstration-only restrictions, and verified test evidence
+with actual counts. The single-owner loopback-only session is
+stated as a demo boundary, never as production multi-user auth.
+
+### Verification
+
+- `npm run check` clean. Full suite **345/345 pass, 0 fail**
+  (was 294/294; +34 from this round: hash-chain 9, claim-ids 6,
+  security 17, xss-probe 1, axe 1; the drafts agent's tests make
+  up the rest of the +51).
+- The first full-suite run during this round showed 19 failures
+  (15 pre-existing + 4 drafts) — all parallel-load flakiness from
+  running during a service restart and concurrent agent activity:
+  every pre-existing failure passed in isolation and on re-run
+  (344/345, then 345/345 after fixing one real failure: a
+  portability test caught a `/home/` path in a fake stack trace
+  inside my security test — fixed by rephrasing the string).
+- Production data hash `f3a08d2e…` unchanged at the end (after the
+  incident restore above). The production app on :3100 was NOT
+  restarted: it serves the new client (Log out button renders, 0
+  console errors — verified read-only) but runs the pre-§31 server
+  code, so the revoke endpoint and the claim migration go live on
+  the next restart. Until then, a Log out click only clears the
+  token locally.
+
+## ~02:27–03:30 Dhaka — eighth VM replacement recovery, integration, §30 live verification, bug-fix round
+
+### Eighth VM replacement recovery — done (restart, not rebuild)
+
+Uptime showed 13 minutes; every process was down (postgres, Mattermost,
+switch-core, nginx, app, runtime) but `~/workspace/switch-server/pgdata`
+survived. Backup first (`~/workspace/backups/switch-recovery-20261107-0227`,
+converge.json inode differs, SHA-256 `f3a08d2e…` verified). Reinstalled
+postgresql-16 + nginx (cogentco apt-source fix), recreated the `pgdata`
+passwd entry (uid 1000), started postgres against the surviving data dir,
+then Mattermost → switch-core (`/health/ready` 7/7 after the cold-start
+listeners settled) → nginx (gateway :3000 → 200). Bridge
+`c004c85d-…` (active) and all four case rooms verified preserved via the
+Switch API (same ids as before). No re-registration, no room recreation.
+
+### §30 draft handoff — done (commit 3894630)
+
+See `docs/DRAFT-HANDOFF.md` for the full design. Append-only inbox
+(`server/drafts.js`, `data/drafts.json`), runtime default `onDraft`
+writes to the inbox and logs, six session-authenticated endpoints in
+`server/server.js` (GET list, POST review/share/reject/archive/
+request-revision), Drafts tab in the case workspace with the §30.2
+review display and a prominent MOCK label. 16 draft tests.
+
+### Integration — done
+
+- The §30 (3894630) and §31 (57ac52f) commits land cleanly on top of
+  each other; `server/server.js` carries BOTH the draft endpoints and
+  the security wiring (verified by grep + the full suite). No merge
+  conflict. The `.env.example` CONVERGE_LLM_* placeholders are present
+  (one block, no duplicate).
+- `docs/positioning.md` §5 corrected to the scorecard (Technical 9,
+  Demo 7, 351 tests, XSS probe PASS, five stale video elements).
+- `docs/DRAFT-HANDOFF.md` stale "§31 remains deferred" line updated.
+
+### §30 pipeline — verified end to end, LIVE (mock provider, labelled)
+
+1. A real human message was posted to `#haggle-dairyco` via the
+   Mattermost API as the human user (post `cbwnp61srjgnpxxn9bahcjjd4c`):
+   "@converge-facilitator Analyze the supplier price increase, calculate
+   its impact, compare negotiation strategies, check the owner's mandate
+   and prepare a counteroffer. Do not approve anything."
+2. The runtime (mock provider) routed it to HAG-014 and produced a
+   draft (`cabd5ba9-…`, mock:true, tools read_case/read_room_timeline/
+   compute_haggle, engine findings 28.63% → 31.62%, $76.80/mo,
+   $921.60/yr, max sustainable $0.1967 — all correct).
+3. The draft landed in `data/drafts.json` and `GET /api/drafts`.
+4. A human session reviewed it (GENERATED → UNDER_REVIEW).
+5. A human session shared it: it appeared in the REAL `#haggle-dairyco`
+   room (event `sw_cfd988fa…`, simulated:false, live drawer 19
+   messages). Status SHARED.
+6. A second share → **409** (no double-post).
+7. The runtime log has 0 post_message/approve calls — the agent never
+   posted or approved on its own.
+
+**BUG FOUND + FIXED (share ASCII):** the first share failed with a
+switch-core 500 (`asyncpg UntranslatableCharacterError`). The `clean`
+sanitiser was applied only to the draft text, not to the footer —
+and the footer carries the session actor name "Mara · Owner", whose
+middle dot (U+00B7) is non-ASCII. Fix: `clean` is now defined first,
+applied to the footer too, and extended to drop any remaining
+non-ASCII character (true ASCII sanitiser). Regression test added
+(`tests/drafts.test.js`: share text is fully ASCII with an em dash in
+the draft and the middle dot in the actor name; the stored draft keeps
+its original text). After the fix the share succeeded.
+**Production data:** the hash changed `f3a08d2e…` → `b379c656…` — this
+is the AUTHORISED share (draft-reviewed + draft-shared audit events
++ the shared message recorded on HAG-014). The HAG-014 approval
+(P2, "$0.19/fl oz for 6 weeks", 2026-11-05) is intact, and the audit
+hash chain verifies valid for all three cases (`verifyAuditChain`).
+
+### Bug-fix round — done (audit Medium/Low, end to end)
+
+- **L1/L3** (nextHaggleId Date.now() fallback): removed — the fallback
+  is now the padded sequence (no HAG ids → HAG-001). `nextHaggleId`
+  exported for tests; 7-case unit test added. **L2** (message-id
+  collision) was already fixed (`randomUUID()` at the post path).
+- **M7** (no live Switch test): new opt-in `tests/switch-live.test.js`
+  (health → 53 ops → rooms → read_context on the real HAG-014 room).
+  Skips cleanly without SWITCH_BASE_URL; passes 2/2 against the live
+  stack.
+- **L25** (stub read_context shape): the stub now returns the real
+  `{result:{threads:[{root, replies}]}}` shape (messages get an id),
+  and `switchTimelineToMessages` is exercised against it in a test.
+- **L9** (client/server TRANSITIONS diverged): the client was missing
+  WITHDRAWN/EXPIRED (added to the server by P0 but never to the
+  client), so the Move dropdown could not offer them. Client table
+  updated to match the server; a pin test asserts them deep-equal;
+  the H8 test now expects `['DISCUSSION','WITHDRAWN','EXPIRED']` for
+  AWAITING_APPROVAL (the correct new behaviour).
+- **L13** (#challenge-slot dead fallback): removed — the element never
+  existed in any template, so the branch could only return silently.
+- **L19** (wizard stepper not clickable): completed steps are now
+  buttons that go back to that step (same as Back, but direct), with
+  a hover/focus cue in CSS.
+- **Timeline $0.19/$0.18 wrinkle:** the Negotiation timeline showed
+  the engine-derived $0.18 in the price column next to the historical
+  "$0.19/fl oz for 6 weeks" label. New `termsPrice()` helper reads
+  the AGREED price from the terms text; the counter-offer and
+  approved rows now show the agreed price ($0.19) matching their
+  labels. Display only — the engine never reads terms text. Test
+  added (approved case shows $0.19 in both column and label).
+- **M18** (stale docs): setup guide 294/294 → 351; README recovery
+  count four → five (eighth replacement ~02:27) and drawer 15 → 19
+  messages; positioning.md §5/§6 corrected (Technical 9, Demo 7,
+  XSS probe done, five stale video elements).
+- **L24** (dependency pinning): playwright `^1.64.1` → `1.64.1`,
+  axe-core `^4.14.0` → `4.14.0`, lockfile synced. `npm audit` is
+  STILL blocked by the registry proxy (403 policy_denied) — the
+  audit itself remains unverified; the install summary reported
+  0 vulnerabilities among the 4 installed packages, which is not
+  a full audit.
+
+### Already fixed (verified, not re-done)
+
+M14 (per-workflow dashboard sub-text), M15/M16 (amber contrast,
+stepper scroll-shadow + scrollIntoView), L5/L6 (generic 500s, CSRF
+Origin check), L10/L12/L14 (strategy-row roles, breadcrumb link,
+search behaviour), L11 (boot message port 3100), L16 (money/pct
+return "—" for non-finite), L18 (⌘K/Ctrl+K copy), L20 (drawer
+role="dialog" aria-modal), L22/L23 (live XSS probe, axe in suite),
+M1/M2/M3/M5/M8/M10/M11/M13/M17 (P0 + dark redesign).
+
+### Accepted as-is (correct, not bugs)
+
+- **L7** (courtMeans called several times per render): the means are
+  cheap and the code is correct; the server tally is only sent when
+  ratings are complete, while courtMeans handles partial ratings —
+  a swap would change behaviour. Left as-is.
+- **L8** (monthly * 12 for the annual figure): trivially correct
+  arithmetic on an engine-derived monthly; the analysis already
+  carries annualExtraCost where it applies. Left as-is.
+- **L21** (COURT tally block duplicated): the code comment records
+  the test-extraction reason; extracting a shared renderer risks the
+  journey tests for no user-facing gain. Left as-is.
+- **L17** (bottomnav at 390px at the edge): cosmetic, scrolls rather
+  than breaks. Accepted.
+
+### Verification (this window)
+
+- `npm run check` clean. Full suite **351 tests (350 pass, 1 skipped
+  — the opt-in live Switch test), 0 fail**. With SWITCH_BASE_URL set
+  the live test runs 2/2 (health, ops, rooms, read_context).
+- Production app :3100 restarted with the new code (draft endpoints
+  + revoke live, verified: GET /api/drafts → 200, POST
+  /api/session/revoke without a token → 401). Runtime restarted
+  wired to the draft inbox (mock provider, labelled; exactly one
+  runtime process, PID 15615; WebSocket protocol 9, heartbeat 2s).
+- Production data hash `b379c656…` (authorised share, see above);
+  audit hash chain valid for all three cases.

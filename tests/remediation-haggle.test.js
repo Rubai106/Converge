@@ -86,8 +86,12 @@ const moveOptions = new Function(
   `${extract(/const TRANSITIONS = \{[\s\S]*?\n\};/, 'TRANSITIONS')}\n${extract(/function moveOptions\(state\) \{[\s\S]*?\n\}/, 'moveOptions')}\nreturn moveOptions;`,
 )();
 
-test('H8: AWAITING_APPROVAL offers only DISCUSSION in the Move dropdown', () => {
-  assert.deepEqual(moveOptions('AWAITING_APPROVAL'), ['DISCUSSION']);
+test('H8: AWAITING_APPROVAL offers DISCUSSION, WITHDRAWN and EXPIRED in the Move dropdown', () => {
+  // WITHDRAWN/EXPIRED (P0) are legitimate Move options for an awaiting
+  // approval — a human can withdraw it or let it expire. APPROVED and
+  // REJECTED stay out: they go through the approval flow, never the
+  // dropdown.
+  assert.deepEqual(moveOptions('AWAITING_APPROVAL'), ['DISCUSSION', 'WITHDRAWN', 'EXPIRED']);
 });
 
 test('H8/GAP-1: PROPOSAL offers no AWAITING_APPROVAL or REJECTED; APPROVED still offers COMPLETED', () => {

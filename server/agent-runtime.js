@@ -13,8 +13,9 @@
 //    there is no approval tool in the registry and this file contains no
 //    transition/approve/adopt/publish call of any kind.
 //  - It NEVER posts messages to a room on its own. Drafts are surfaced
-//    through onDraft (default: logged) for a human to use. An agent that
-//    posts unprompted is not this agent.
+//    through onDraft (default: written to the local draft inbox,
+//    server/drafts.js, and logged) for a human to review and share.
+//    An agent that posts unprompted is not this agent.
 //  - Specialist roles (Facilitator, Financial Analyst, Researcher,
 //    Challenger/Auditor, Workflow Specialist) are INTERNAL lenses inside
 //    the facilitator's system prompt — not separate Switch agents. This
@@ -47,11 +48,13 @@
 // Logs clearly on start whether a live model is configured or not.
 
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { connectWithFallback, EventDeduper, Cursor, computeBackoffMs } from './switch-ws.js';
 import { createProvider, LlmNotConfiguredError } from './llm.js';
 import { createToolRegistry } from './tools.js';
+import { appendDraft, findOpenDraft, resolveDraftsFile } from './drafts.js';
 import { withRoomConnection, callOp, switchTimelineToMessages } from './switch-client.js';
 
 export const DEFAULT_ROOMS = [
@@ -98,6 +101,38 @@ function defaultLogger(level, msg, detail) {
   else console.log(line);
 }
 
+// The structured findings attached to a draft — what the facilitator
+// actually investigated, so a human can check it. HAGGLE findings are
+// the deterministic engine's output (labelled engine-computed, never
+// model-computed); other workflows record the evidence ids the model
+// saw in the case context. Pure, so tests can exercise it directly.
+export function buildFindings(c, engineCtx) {
+  if (c.workflow === 'HAGGLE' && engineCtx && engineCtx.analysis) {
+    const a = engineCtx.analysis;
+    return {
+      source: 'deterministic engine — no LLM maths',
+      analysis: {
+        oldFoodCostPct: a.oldFoodCostPct,
+        newFoodCostPct: a.newFoodCostPct,
+        monthlyExtraCost: a.monthlyExtraCost,
+        annualExtraCost: a.annualExtraCost,
+        maxSustainableUnitPrice: a.maxSustainableUnitPrice,
+        costDiffPerServing: a.costDiffPerServing,
+        pctChange: a.pctChange,
+      },
+      strategies: (engineCtx.strategies || []).map((s) => ({
+        id: s.id, name: s.name, unitPrice: s.unitPrice,
+        foodCostPct: s.foodCostPct, extraVsOldPerMonth: s.extraVsOldPerMonth,
+        savingVsNewPerMonth: s.savingVsNewPerMonth,
+      })),
+    };
+  }
+  return {
+    source: 'case evidence (read_case context)',
+    evidenceIds: (c.evidence || []).map((e) => e.id),
+  };
+}
+
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // Read the case store without ever writing to it (no migration, no save).
@@ -118,9 +153,31 @@ export function createAgentRuntime(opts = {}) {
   const roomIds = opts.roomIds || (process.env.CONVERGE_ROOMS ? process.env.CONVERGE_ROOMS.split(',').map((s) => s.trim()).filter(Boolean) : DEFAULT_ROOMS);
   const log = opts.logger || defaultLogger;
   const provider = opts.provider || createProvider();
+  // Provider identity for the draft record: createProvider() sets
+  // .provider/.model; a raw provider object (tests) carries .name
+  // instead and no .model — normalise so the record never says
+  // "undefined".
+  const providerName = provider.provider || provider.name || 'unknown';
+  const providerModel = provider.model || (provider.isMock ? 'mock' : 'unknown');
   const connect = opts.connect || connectWithFallback;
   const getCases = opts.getCases || (() => loadCasesReadOnly(opts.dataFile));
-  const onDraft = opts.onDraft || ((draft) => log('info', 'draft ready (not posted — a human decides)', { caseId: draft.caseId, role: draft.role, mock: draft.mock }));
+  // The draft inbox file (server/drafts.js). The default onDraft appends
+  // there; opts.draftsFile exists so tests can point at a scratch file.
+  const draftsFile = opts.draftsFile || resolveDraftsFile();
+  const defaultOnDraft = (draft) => {
+    // The handoff: the runtime appends the draft to the local inbox so
+    // the app can show it for human review. It never calls a mutating
+    // app endpoint and never holds a session token. A failed inbox
+    // write is logged, never fatal — the draft is still logged, so it
+    // is not silently lost.
+    try {
+      appendDraft(draft, draftsFile);
+    } catch (err) {
+      log('error', 'draft inbox write failed — draft logged only', { caseId: draft.caseId, error: err.message });
+    }
+    log('info', 'draft ready (not posted — a human decides)', { caseId: draft.caseId, role: draft.role, mock: draft.mock, draftId: draft.id });
+  };
+  const onDraft = opts.onDraft || defaultOnDraft;
   const onEventLog = opts.onEventLog || (() => {});
 
   const cursor = new Cursor(0);
@@ -208,12 +265,18 @@ export function createAgentRuntime(opts = {}) {
       return null;
     }
     const role = roleLensFor(c, text);
+    // Capture which tools actually ran, so the draft record can say
+    // what the facilitator investigated: snapshot the registry audit
+    // log before the calls and take the successful entries after.
+    const auditLog = Array.isArray(registry.auditLog) ? registry.auditLog : [];
+    const auditMark = auditLog.length;
     // Gather context through the tools, never by hand: the numbers the
     // model sees are the engine's numbers.
     const caseCtx = await registry.callTool('read_case', { caseId });
     const timelineCtx = await registry.callTool('read_room_timeline', { caseId });
     let engineCtx = null;
     if (c.workflow === 'HAGGLE') engineCtx = await registry.callTool('compute_haggle', { caseId });
+    const toolsUsed = auditLog.slice(auditMark).filter((e) => e.ok).map((e) => e.tool);
     const system = [
       'You are the CONVERGE facilitator, the single agent in this room. You draft responses for a human to use; you never decide anything yourself.',
       'HARD RULES:',
@@ -248,16 +311,35 @@ export function createAgentRuntime(opts = {}) {
       log('error', 'draft failed — no draft produced', { caseId, error: err.message });
       return null;
     }
+    // The draft record: everything a human needs to review it, and
+    // nothing hidden. `request` is the original human message; `findings`
+    // is what the facilitator investigated (engine output for HAGGLE,
+    // evidence ids otherwise); `supersedes` links to the open draft this
+    // one replaces — the old record stays on the record, never overwritten.
+    let supersedes = null;
+    try {
+      const open = findOpenDraft(caseId, draftsFile);
+      supersedes = open ? open.id : null;
+    } catch { supersedes = null; }
+    const now = new Date().toISOString();
     const draft = {
+      id: randomUUID(),
       caseId, roomId, messageId, from: senderName,
+      request: text,
       draft: result.data.draft,
       role: result.data.role,
       confidence: result.data.confidence,
       caveats: result.data.caveats || [],
+      toolsUsed,
+      findings: buildFindings(c, engineCtx),
       needsHumanReview: true,
-      model: provider.model,
+      status: 'GENERATED',
+      provider: providerName,
+      model: providerModel,
       mock: Boolean(result.mock),
-      at: new Date().toISOString(),
+      supersedes,
+      createdAt: now,
+      at: now,
     };
     state.draftsProduced += 1;
     if (draft.mock) log('warn', 'MOCK draft produced — test mock, NOT a live model response', { caseId, role: draft.role });

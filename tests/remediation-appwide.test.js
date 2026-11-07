@@ -21,8 +21,11 @@ const SEED_EVIDENCE = [
 ];
 
 test('L5: server-side claim->evidence mapping matches the seed behaviour', () => {
-  const refs = claimEvidenceRefs(extractClaims(SEED_TRANSCRIPT), SEED_EVIDENCE);
-  assert.deepEqual(refs, { C1: ['E1'], C2: ['E2'], C3: [] });
+  const claims = extractClaims(SEED_TRANSCRIPT);
+  const refs = claimEvidenceRefs(claims, SEED_EVIDENCE);
+  // Seed behaviour: survey claim -> E1, "40 percent" claim -> E2,
+  // title claim -> none. Keys are the stable content-derived ids.
+  assert.deepEqual(refs, { [claims[0].id]: ['E1'], [claims[1].id]: ['E2'], [claims[2].id]: [] });
 });
 
 test('L5: a claim sharing no content word with any evidence cites nothing', () => {

@@ -75,14 +75,35 @@ async function api(path, opts = {}) {
   return body;
 }
 
+// §31.3: Log out — revoke the current session server-side, then
+// clear the cached token. Uses a raw fetch (not api()) so a stale
+// token does not trigger api()'s 401-retry, which would issue and
+// immediately revoke a fresh session. The next mutating call
+// re-issues a fresh session automatically (the demo has no login
+// screen); revocation ends THIS session.
+async function logout() {
+  const t = sessionToken;
+  if (t) {
+    try { await fetch('/api/session/revoke', { method: 'POST', headers: { 'X-Converge-Session': t } }); } catch { /* already invalid — still clear locally */ }
+  }
+  sessionToken = null;
+  sessionPromise = null;
+  try { sessionStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+  const chip = document.querySelector('.user-chip');
+  if (chip) chip.textContent = 'Signed out';
+}
+
 // Valid next states — mirrors server/engine.js TRANSITIONS.
+// Keep them in sync: WITHDRAWN/EXPIRED (P0) must appear here too,
+// or the Move dropdown can never offer them. Pinned by a test.
 const TRANSITIONS = {
   DRAFT: ['INTAKE', 'CANCELLED'], INTAKE: ['INVESTIGATING', 'BLOCKED', 'CANCELLED'],
   INVESTIGATING: ['DISCUSSION', 'BLOCKED', 'CANCELLED'], DISCUSSION: ['PROPOSAL', 'BLOCKED', 'CANCELLED'],
   PROPOSAL: ['AWAITING_APPROVAL', 'DISCUSSION', 'REJECTED', 'CANCELLED'],
-  AWAITING_APPROVAL: ['APPROVED', 'REJECTED', 'DISCUSSION'],
+  AWAITING_APPROVAL: ['APPROVED', 'REJECTED', 'DISCUSSION', 'WITHDRAWN', 'EXPIRED'],
   APPROVED: ['COMPLETED', 'BLOCKED'], COMPLETED: [],
   REJECTED: ['DISCUSSION', 'CANCELLED'], BLOCKED: ['INTAKE', 'INVESTIGATING', 'DISCUSSION', 'CANCELLED'], CANCELLED: [],
+  WITHDRAWN: [], EXPIRED: [],
 };
 const STEPS = ['Draft', 'Intake', 'Investigating', 'Discussion', 'Proposal', 'Awaiting approval', 'Approved', 'Completed'];
 // M9 (2026-11-07): INTAKE is its own step now — DRAFT and INTAKE used
@@ -203,6 +224,17 @@ function approvedStrategy(c) {
   if (!pid) return null;
   return (c.strategies || []).find((s) => s.id === PROPOSAL_TO_STRATEGY[pid]) || null;
 }
+// The agreed price from an approval's terms text (e.g. "$0.19/fl oz
+// for 6 weeks" -> 0.19). The terms are the historical record of what
+// was actually agreed; the strategy's unitPrice is what the engine
+// derives today and can differ (HAG-014: approved $0.19, engine
+// derives $0.18). The timeline shows the AGREED price so its price
+// column and its label never contradict each other. Display only —
+// the engine never reads terms text.
+function termsPrice(terms) {
+  const m = /\$(\d+(?:\.\d+)?)/.exec(String(terms || ''));
+  return m ? Number(m[1]) : null;
+}
 // One-line financial consequence of a strategy, from engine data:
 // extra cost per serving + per month, food-cost %, and the mandate
 // check against the owner's max approved price. Shared by the approval
@@ -266,6 +298,14 @@ let activityCaseFilter = 'All';
 let searchQuery = '';
 let roomCaseId = null;
 let claimLocal = {}; // caseId -> claimId -> {status, challenge:{text, evidence, by}}
+// Drafts (§30): the agent runtime appends drafts to the server inbox;
+// the app reads them per case. caseDrafts is a cache (newest first),
+// refreshed when a case opens, when the Drafts tab opens, and after
+// any draft action. selectedDraftId / shareConfirmId are per-case
+// view state, reset when a different case opens.
+let caseDrafts = {}; // caseId -> [draft]
+let selectedDraftId = null;
+let shareConfirmId = null;
 
 // ---------- guided HAGGLE case creation ----------
 // Step validators + payload builder are pure (no DOM, no fetch) so the
@@ -420,7 +460,18 @@ function validateRatingScores(scores) {
   }
   return null;
 }
-async function reloadCase(c) { details[c.id] = await api(`/api/cases/${c.id}`); }
+async function reloadCase(c) { details[c.id] = await api(`/api/cases/${c.id}`); await loadDraftsFor(c.id); }
+// Drafts (§30): fetch the case's drafts from the server inbox into the
+// cache. Best-effort — a failed fetch leaves the previous cache (or an
+// empty list) so a drafts outage never breaks the case view.
+async function loadDraftsFor(caseId) {
+  try {
+    const res = await api(`/api/drafts?caseId=${encodeURIComponent(caseId)}`);
+    caseDrafts[caseId] = res.drafts || [];
+  } catch {
+    caseDrafts[caseId] = caseDrafts[caseId] || [];
+  }
+}
 
 // STALENESS fix (2026-11-06): a case changed server-side outside this
 // tab (another tab, a direct API call, another user) used to stay stale
@@ -444,8 +495,14 @@ async function refreshOpenCase() {
   refreshingCase = true;
   try {
     const fresh = await api(`/api/cases/${encodeURIComponent(id)}`);
+    // Drafts (§30): a draft may have arrived since the case was opened
+    // (the runtime appends independently) — refresh the inbox too, so
+    // the Drafts tab count stays accurate.
+    const freshDrafts = await api(`/api/drafts?caseId=${encodeURIComponent(id)}`).then((r) => r.drafts || []).catch(() => caseDrafts[id] || []);
     if (currentCaseId !== id || !details[id]) return;
-    if (JSON.stringify(fresh) !== JSON.stringify(details[id])) {
+    const draftsChanged = JSON.stringify(freshDrafts) !== JSON.stringify(caseDrafts[id] || []);
+    if (draftsChanged) caseDrafts[id] = freshDrafts;
+    if (JSON.stringify(fresh) !== JSON.stringify(details[id]) || draftsChanged) {
       details[id] = fresh;
       const row = cases.find((c) => c.id === id);
       if (row) row.state = fresh.state;
@@ -526,7 +583,7 @@ function renderSwitchStatus() {
 // resolveCaseRoute instead of being dropped — the hash is still the
 // source of truth, the server is the source of the detail.
 const VIEWS = ['overview', 'cases', 'workflows', 'evidence', 'decisions', 'activity', 'settings', 'create'];
-const CASE_TABS = ['overview', 'analysis', 'negotiation', 'evidence', 'audit'];
+const CASE_TABS = ['overview', 'analysis', 'negotiation', 'evidence', 'audit', 'drafts'];
 function hashFor(v, caseId, tab) {
   if (caseId) return `#/case/${encodeURIComponent(caseId)}${tab && tab !== 'overview' ? `?tab=${tab}` : ''}`;
   return `#/${v}`;
@@ -558,9 +615,18 @@ async function resolveCaseRoute(id, tab) {
   // strategy this case shows selected (its own approval/pending/default),
   // never a leftover selection from the previous case.
   if (id !== currentCaseId) selectedStrategy = null;
+  // Drafts (§30): the selected draft and the share confirmation are
+  // per-case view state too — reset them on a case change.
+  if (id !== currentCaseId) { selectedDraftId = null; shareConfirmId = null; }
   currentCaseId = id; currentTab = tab || 'overview';
   $$('.nav-item').forEach((b) => { b.classList.remove('is-active'); b.removeAttribute('aria-current'); });
-  if (details[id]) { routeState = null; render(); $('#view').focus({ preventScroll: true }); return true; }
+  if (details[id]) {
+    routeState = null;
+    // Drafts (§30): the cached detail renders immediately — load the
+    // inbox first so the Drafts tab count is accurate on open.
+    await loadDraftsFor(id);
+    render(); $('#view').focus({ preventScroll: true }); return true;
+  }
   routeState = { id, tab: currentTab, status: 'loading' };
   render();
   $('#view').focus({ preventScroll: true });
@@ -568,6 +634,9 @@ async function resolveCaseRoute(id, tab) {
     const d = await api(`/api/cases/${encodeURIComponent(id)}`);
     if (seq !== routeSeq) return true; // superseded by a newer navigation
     details[id] = d;
+    // Drafts (§30): fetch the inbox for this case alongside the detail
+    // so the Drafts tab (and its open-draft count) is accurate on open.
+    await loadDraftsFor(id);
     if (!cases.some((c) => c.id === id)) {
       cases.push(d);
       $('#nav-case-count').textContent = String(cases.filter(isActive).length);
@@ -752,7 +821,12 @@ function casesTableRows(list) {
     // only filled after a transition. Inventing a time would fabricate
     // provenance; the audit trail on each case carries real timestamps.
     // L2: clickable rows expose their action to assistive tech.
-    return `<tr class="clickable" data-open="${esc(c.id)}" tabindex="0" role="button" aria-label="Open case ${esc(c.id)} — ${esc(c.title)}">
+    // §31.3 (axe): the row used to carry an aria-label override,
+    // which failed WCAG 2.5.3 (label-content-name-mismatch) because
+    // it did not contain all the row's visible text. The name now
+    // comes from the row's own visible content (case id + title +
+    // workflow + …), which is both complete and accurate.
+    return `<tr class="clickable" data-open="${esc(c.id)}" tabindex="0" role="button">
       <td><span class="num">${esc(c.id)}</span><br><span class="muted small">${esc(c.title)}</span></td>
       <td>${esc(c.workflow)}</td><td>${esc(counterparty(c))}</td>
       <td class="num">${impact}</td><td>${statePill(c.state)}</td>
@@ -850,7 +924,9 @@ function activityFeed() {
         const m = /^state:(\w+)->(\w+)$/.exec(a.event);
         items.push({ at: a.at, caseId: d.id, text: m ? `${a.actor} moved ${d.id} from ${prettyState(m[1])} to ${prettyState(m[2])}` : `${a.actor} — ${a.event}` });
       } else if (a.event === 'claim-status') {
-        const claim = (d.claims || []).find((cl) => cl.id === a.claim);
+        // §31.2: audit events record the stable claim id, but old
+        // events carry the legacy positional id — resolve either.
+        const claim = (d.claims || []).find((cl) => cl.id === a.claim || cl.legacyId === a.claim);
         const challenge = claim?.guestChallenge?.text ? ` — guest challenge: “${claim.guestChallenge.text}”` : '';
         items.push({ at: a.at, caseId: d.id, text: a.claim && a.status ? `${a.actor} changed claim ${a.claim} on ${d.id} to ${a.status}${challenge}` : `${a.actor} changed a claim's status on ${d.id}` });
       } else {
@@ -945,7 +1021,7 @@ function renderEvidenceView() {
     <section class="panel"><div class="table-wrap"><table>
       <caption>${items.length} item${items.length === 1 ? '' : 's'}${evidenceFilter === 'All' ? '' : ` — status ${evidenceFilter}`}.</caption>
       <thead><tr><th scope="col">ID</th><th scope="col">Type</th><th scope="col">Source</th><th scope="col">Case</th><th scope="col">Status</th><th scope="col">Note</th></tr></thead>
-      <tbody>${items.map((e) => `<tr class="clickable" data-open="${e.caseId}" role="button" aria-label="Open case ${esc(e.caseId)} — ${esc(e.caseTitle)}"><td><span class="tag-ev">[${esc(e.caseId)} · ${esc(e.id)}]</span></td><td>${esc(e.type)}</td><td>${esc(e.source)}</td><td class="num">${esc(e.caseId)}<br><span class="muted small">${esc(e.caseTitle)}</span></td><td>${esc(e.status)}</td><td class="muted">${esc(e.note || '')}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">No evidence with status ${esc(evidenceFilter)}.</td></tr>`}</tbody>
+      <tbody>${items.map((e) => `<tr class="clickable" data-open="${e.caseId}" role="button"><td><span class="tag-ev">[${esc(e.caseId)} · ${esc(e.id)}]</span></td><td>${esc(e.type)}</td><td>${esc(e.source)}</td><td class="num">${esc(e.caseId)}<br><span class="muted small">${esc(e.caseTitle)}</span></td><td>${esc(e.status)}</td><td class="muted">${esc(e.note || '')}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">No evidence with status ${esc(evidenceFilter)}.</td></tr>`}</tbody>
     </table></div></section>`;
   $$('[data-filter]', $('#view')).forEach((b) => b.addEventListener('click', () => { evidenceFilter = b.dataset.filter; renderEvidenceView(); }));
   bindCaseRows($('#view'));
@@ -1100,7 +1176,12 @@ function renderCreateWizard() {
     const n = i + 1;
     const cls = n < wizard.step ? 'done' : (n === wizard.step ? 'current' : '');
     const cur = n === wizard.step ? ' aria-current="step"' : '';
-    return `<li class="${cls}"${cur}>${n}. ${esc(s)}</li>`;
+    // L19: a completed step is a button — clicking it goes back to
+    // that step (same as Back, but direct). Future steps stay plain.
+    const inner = n < wizard.step
+      ? `<button type="button" class="wz-step-btn" data-wz-step="${n}" aria-label="Go back to step ${n}: ${esc(s)}">${n}. ${esc(s)}</button>`
+      : `${n}. ${esc(s)}`;
+    return `<li class="${cls}"${cur}>${inner}</li>`;
   }).join('');
   const isLast = wizard.step === 5;
   $('#view').innerHTML = `
@@ -1122,6 +1203,12 @@ function renderCreateWizard() {
       </form>
     </section>`;
   $('#wz-cancel').addEventListener('click', cancelWizard);
+  // L19: completed stepper steps are clickable — go back to that step.
+  $$('.wz-step-btn', $('#view')).forEach((b) => b.addEventListener('click', () => {
+    wizard.errors = {}; wizard.createError = null;
+    wizard.step = Number(b.dataset.wzStep) || 1;
+    renderCreateWizard();
+  }));
   const back = $('#wz-back');
   if (back) back.addEventListener('click', () => { wizard.errors = {}; wizard.createError = null; wizard.step -= 1; renderCreateWizard(); });
   // Warning acknowledgement (review step): ticking the box enables
@@ -1228,7 +1315,10 @@ function renderCase() {
   const terminalChip = si.terminal
     ? `<p class="stepper-state">${statePill(c.state)}<span>Case ${si.terminal.toLowerCase()} — the workflow stopped${si.idx !== null ? ` at ${STEPS[si.idx]}` : ''}.</span></p>`
     : '';
-  const tabs = [['overview', 'Overview'], ['analysis', 'Analysis'], ['negotiation', 'Negotiation'], ['evidence', 'Evidence'], ['audit', 'Audit']];
+  // Drafts (§30): the tab carries the count of open drafts (GENERATED
+  // or UNDER_REVIEW) so a waiting draft is visible without opening it.
+  const openDrafts = (caseDrafts[currentCaseId] || []).filter((d) => d.status === 'GENERATED' || d.status === 'UNDER_REVIEW').length;
+  const tabs = [['overview', 'Overview'], ['analysis', 'Analysis'], ['negotiation', 'Negotiation'], ['evidence', 'Evidence'], ['audit', 'Audit'], ['drafts', `Drafts${openDrafts ? ` (${openDrafts})` : ''}`]];
   const primary = casePrimaryAction(c);
   // M10: an early case gets a visible Advance button — the Move
   // dropdown used to be the only way forward, and its first option
@@ -1286,7 +1376,13 @@ function renderCase() {
     pendingEvidenceHighlight = null;
     if (row) { row.scrollIntoView({ block: 'nearest' }); row.classList.add('flash'); }
   }
-  $$('.tab', $('#view')).forEach((t) => t.addEventListener('click', () => { currentTab = t.dataset.tab; renderCase(); syncCaseHash(); }));
+  $$('.tab', $('#view')).forEach((t) => t.addEventListener('click', async () => {
+    currentTab = t.dataset.tab;
+    // Drafts (§30): re-fetch on open — a draft may have arrived since
+    // the case was opened (the runtime appends independently).
+    if (currentTab === 'drafts') await loadDraftsFor(currentCaseId);
+    renderCase(); syncCaseHash();
+  }));
   // In-page shortcuts (header primary action, Overview Next step,
   // Key figures "Analysis" link): switch to the named tab.
   $$('[data-goto-tab]', $('#view')).forEach((b) => b.addEventListener('click', () => { currentTab = b.dataset.gotoTab; renderCase(); syncCaseHash(); }));
@@ -1553,6 +1649,7 @@ function tabContent(c) {
   if (currentTab === 'negotiation') return negotiationTab(c);
   if (currentTab === 'evidence') return evidenceTab(c);
   if (currentTab === 'audit') return auditTab(c);
+  if (currentTab === 'drafts') return draftsTab(c);
   return '';
 }
 function overviewTab(c) {
@@ -1650,13 +1747,13 @@ function analysisTab(c) {
   // The original transcript, sentence by sentence, with the
   // factual/opinion classification shown — QA 2026-11-06: the text
   // itself was never displayed, so the separation could not be seen.
-  // Claim ids follow the extractor: C{n} where n is the 1-based
-  // sentence index (the opinion sentence keeps its number but is not
-  // a claim).
+  // Sentences are matched to claims by TEXT (§31.2: claim ids are
+  // stable content-derived ids, not positional C{n} — a reorder must
+  // never rebind a sentence to a different claim).
   const sentences = String(c.transcript || '').split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
   const transcriptRows = sentences.map((s, i) => {
     const isOpinion = /^(i think|i feel|in my opinion|i believe)/i.test(s);
-    const claim = claims.find((cl) => cl.id === `C${i + 1}`);
+    const claim = claims.find((cl) => cl.text === s);
     const tag = isOpinion
       ? '<span class="pill pill-grey">opinion — separated, not a claim</span>'
       : claim ? `<span class="pill pill-teal">factual claim ${esc(claim.id)}</span>`
@@ -1876,11 +1973,13 @@ function haggleTimeline(c) {
   const rec = c.pendingApproval || c.approval;
   const strat = rec ? (c.strategies || []).find((s) => PROPOSAL_TO_STRATEGY[rec.proposalId] === s.id) : null;
   if (rec && strat) {
-    rows.push({ price: money(strat.unitPrice), label: `Counter-offer — ${rec.terms}`, who: `${supplier} rep · ${rec.proposalId}` });
+    // The price column shows the AGREED price from the terms, not the
+    // engine's current derivation, so it matches the label.
+    rows.push({ price: money(termsPrice(rec.terms) ?? strat.unitPrice), label: `Counter-offer — ${rec.terms}`, who: `${supplier} rep · ${rec.proposalId}` });
   }
   const approved = c.approval ? approvedStrategy(c) : null;
   rows.push({
-    price: approved ? money(approved.unitPrice) : '?',
+    price: approved ? money(termsPrice(c.approval.terms) ?? approved.unitPrice) : '?',
     label: c.approval ? `Approved — ${c.approval.terms}` : 'Approval — pending owner decision',
     who: c.approval ? c.approval.approvedBy : 'Owner',
   });
@@ -1993,6 +2092,85 @@ function auditTab(c) {
     ${c.approval ? `<div class="decision-sentence">“I approve ${esc(c.approval.terms)}.” — ${esc(c.approval.approvedBy)}, ${fmtDateTime(c.approval.approvedAt)} · case <span class="num">${esc(c.id)}</span></div>` : '<p class="empty">No decision recorded yet — the signed sentence appears here once a human approves.</p>'}
     ${c.rejectedTerms ? `<div class="decision-sentence">“Rejected: ${esc(c.rejectedTerms.terms)}.” — ${esc(c.rejectedTerms.rejectedBy)}, ${fmtDateTime(c.rejectedTerms.rejectedAt)} · case <span class="num">${esc(c.id)}</span></div>` : ''}
     ${events.length ? `<ol class="audit-list">${events.map((e) => `<li><span class="au-time">${fmtDateTime(e.at)}</span><strong>${esc(e.actor)}</strong> (${esc(e.kind)}) — ${esc(e.event)}${e.rejectedTerms ? ` — rejected terms: ${esc(e.rejectedTerms)}` : ''}</li>`).join('')}</ol>` : '<p class="empty">No audit events yet in this session. State changes, proposals and room messages are logged here.</p>'}
+  </section>`;
+}
+// ---------- Agent drafts (§30) ----------
+// The facilitator's drafts, for human review. A draft is never approved
+// and never published by the agent: a human reads it here and explicitly
+// chooses to share it in the Mattermost room — and sharing is not
+// approval. Mock drafts (mock provider) are labelled as test output,
+// never as a live model response.
+function draftStatusPill(status) {
+  const cls = { GENERATED: 'pill-amber', UNDER_REVIEW: 'pill-amber', SHARED: 'pill-teal', REJECTED: 'pill-red', ARCHIVED: 'pill-grey' }[status] || 'pill-grey';
+  return `<span class="pill ${cls}">${esc(String(status).replace(/_/g, ' '))}</span>`;
+}
+function draftFindingsHtml(d) {
+  const f = d.findings || {};
+  if (f.analysis) {
+    const a = f.analysis;
+    const rows = (f.strategies || []).map((s) => `<tr><td>${esc(s.id)}</td><td>${esc(s.name || '')}</td><td class="num">${money(s.unitPrice)}</td><td class="num">${pct(s.foodCostPct)}</td><td class="num">${money(s.extraVsOldPerMonth)} / mo</td></tr>`).join('');
+    return `<h3>Engine-computed findings — deterministic, not model-computed</h3>
+      <p class="small">Food cost ${pct(a.oldFoodCostPct)} → <strong>${pct(a.newFoodCostPct)}</strong> · extra ${money(a.monthlyExtraCost)} / mo (${money(a.annualExtraCost)} / yr) · max sustainable price ${money(a.maxSustainableUnitPrice)} · price change ${a.pctChange === null ? '—' : `+${a.pctChange}%`}.</p>
+      ${rows ? `<div class="table-wrap"><table><caption>Strategies from the deterministic engine.</caption><thead><tr><th scope="col">ID</th><th scope="col">Strategy</th><th scope="col" class="num">Price</th><th scope="col" class="num">Food cost</th><th scope="col" class="num">Extra / mo</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
+      <p class="small muted mt-8">${esc(f.source || '')}</p>`;
+  }
+  const ids = f.evidenceIds || [];
+  return `<h3>Evidence examined</h3>
+    <p class="small">${ids.length ? ids.map((id) => `<span class="tag-ev">[${esc(id)}]</span>`).join(' ') : 'No evidence ids recorded for this draft.'}</p>
+    <p class="small muted mt-8">${esc(f.source || '')}</p>`;
+}
+function draftsTab(c) {
+  const drafts = caseDrafts[c.id] || [];
+  const selected = drafts.find((d) => d.id === selectedDraftId) || drafts[0] || null;
+  const intro = `<section class="panel" aria-labelledby="dr-h"><h2 id="dr-h">Agent drafts — human review</h2>
+    <p class="small">When the facilitator answers a message in the Switch room, its draft lands here — never posted, never approved by the agent. A human reads it, checks it against the engine figures and the evidence, and explicitly chooses to share it in Mattermost. <strong>Sharing a draft is not approval</strong> — the owner must separately approve any agreement.</p>
+    <p class="small muted mt-8">Drafts are labelled by their source. A mock draft is test output from the mock provider, never a live model response.</p></section>`;
+  if (!drafts.length) {
+    return intro + `<section class="panel"><p class="empty">No drafts yet for this case. When the facilitator answers a message in the Switch room, the draft appears here for human review.</p></section>`;
+  }
+  const list = `<section class="panel" aria-labelledby="dr-list-h"><h2 id="dr-list-h">Drafts (${drafts.length})</h2>
+    <div class="draft-list">${drafts.map((d) => `<button type="button" class="draft-item${selected && d.id === selected.id ? ' is-selected' : ''}" data-draft-select="${esc(d.id)}">
+      <span class="draft-item-top">${draftStatusPill(d.status)} <span class="num small">${esc(d.id.slice(0, 8))}</span> <span class="muted small">${esc(d.role)} · ${fmtDateTime(d.createdAt || d.at)}</span></span>
+      <span class="draft-item-req">${esc(d.request || '')}</span>
+      ${d.mock ? '<span class="pill pill-amber">MOCK</span>' : ''}
+    </button>`).join('')}</div></section>`;
+  if (!selected) return intro + list;
+  const d = selected;
+  const superseded = d.supersedes ? drafts.find((x) => x.id === d.supersedes) : null;
+  const canAct = d.status === 'GENERATED' || d.status === 'UNDER_REVIEW';
+  const confirm = shareConfirmId === d.id;
+  return intro + list + `<section class="panel" aria-labelledby="dr-detail-h"><h2 id="dr-detail-h">Draft <span class="num">${esc(d.id.slice(0, 8))}</span> ${draftStatusPill(d.status)}</h2>
+    <p class="small muted">${esc(d.role)} · ${esc(d.provider || '')}/${esc(d.model || '')} · confidence ${esc(d.confidence)} · ${fmtDateTime(d.createdAt || d.at)}${d.from ? ` · in reply to ${esc(d.from)}` : ''}</p>
+    ${d.mock ? '<p class="sim-label mt-10">MOCK — test output, NOT a live model response. This draft was produced by the mock provider, not by any model.</p>' : ''}
+    ${superseded ? `<p class="small mt-8">Replaces draft <span class="num">${esc(superseded.id.slice(0, 8))}</span> (${draftStatusPill(superseded.status)}). The earlier draft is preserved in the list above — it was never overwritten.</p>` : ''}
+    <h3>Original human request</h3>
+    <p class="draft-text">${esc(d.request || '')}</p>
+    <h3>What the facilitator investigated</h3>
+    <p class="small">Tools used: ${(d.toolsUsed || []).map((t) => `<span class="tag-ev">${esc(t)}</span>`).join(' ') || 'none recorded'}</p>
+    ${draftFindingsHtml(d)}
+    <h3>Recommendation — model-generated draft (interpretation, needs human review)</h3>
+    <p class="draft-text">${esc(d.draft || '')}</p>
+    <h3>Risks and uncertainties</h3>
+    ${(d.caveats || []).length ? `<ul class="caveat-list">${d.caveats.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p class="small muted">No caveats recorded.</p>'}
+    <p class="small mt-10"><strong>Human review required.</strong> ${d.status === 'SHARED' ? 'This draft was shared — sharing is not approval, and no agreement has been approved by sharing it.' : 'This draft is not approved and has not been shared. Nothing here takes effect until a human acts.'}</p>
+    ${d.shareResult ? `<p class="small mt-8">Shared in <span class="num">${esc(d.shareResult.room || '')}</span> by ${esc(d.sharedBy || '')}, ${fmtDateTime(d.sharedAt)}${d.shareResult.eventId ? ` · event <span class="num">${esc(d.shareResult.eventId)}</span>` : ''}${d.shareResult.simulated ? ' · <strong>SIMULATED — stub room, not real Mattermost.</strong>' : ' · delivered to the live Mattermost room.'}</p>` : ''}
+    ${d.shareError ? `<p class="small mt-8 text-red">Sharing failed at ${fmtDateTime(d.shareError.at)}: ${esc(d.shareError.message)}</p>` : ''}
+    ${d.revisionRequested ? `<p class="small mt-8">Revision requested by ${esc(d.revisionRequested.by)}, ${fmtDateTime(d.revisionRequested.at)}${d.revisionRequested.note ? `: “${esc(d.revisionRequested.note)}”` : ''}. Ask the facilitator in the room for the revision — it arrives here as a new draft.</p>` : ''}
+    <p class="inline-error" id="draft-note" role="alert" hidden></p>
+    <div class="btn-row mt-10">
+      ${d.status === 'GENERATED' ? '<button class="btn btn-sm" type="button" data-draft-action="review">Start review</button>' : ''}
+      ${canAct && !confirm ? '<button class="btn btn-sm" type="button" data-draft-action="share">Share in Mattermost</button>' : ''}
+      ${canAct ? '<button class="ghost-btn btn-sm" type="button" data-draft-action="reject">Reject</button>' : ''}
+      ${d.status !== 'ARCHIVED' ? '<button class="ghost-btn btn-sm" type="button" data-draft-action="archive">Archive</button>' : ''}
+    </div>
+    ${confirm ? `<div class="warn-box" role="alert"><h3>Share this draft in ${esc(c.switchRoom)}?</h3>
+      <p class="small">The draft will be posted to the room as a draft, labelled as one. <strong>Sharing is NOT approval</strong> — the owner must separately approve any agreement. The facilitator cannot share on its own; this is your decision.</p>
+      <div class="btn-row mt-10"><button class="btn btn-sm" type="button" data-draft-action="share-confirm">Confirm share</button> <button class="ghost-btn btn-sm" type="button" data-draft-action="share-cancel">Cancel</button></div></div>` : ''}
+    ${canAct ? `<form class="revision-form mt-12" id="revision-form">
+      <label for="revision-note">Request a revision (recorded on this draft; the facilitator produces a new draft when you ask in the room)</label>
+      <textarea id="revision-note" rows="2" placeholder="What should the facilitator change?"></textarea>
+      <p class="mt-8"><button class="ghost-btn btn-sm" type="submit">Request revision</button></p>
+      <p class="inline-error" id="revision-error" role="alert" hidden></p></form>` : ''}
   </section>`;
 }
 function railPanels(c) {
@@ -2161,6 +2339,62 @@ function bindCaseEvents(c) {
     } catch (e) { showCaseError(e.message); }
   }));
   $$('[data-challenge]', $('#view')).forEach((b) => b.addEventListener('click', () => showChallengeForm(c, b.dataset.challenge)));
+  // ---------- Agent drafts (§30) ----------
+  // Selecting a draft re-renders the detail panel. Actions call the
+  // draft endpoints (session-authenticated by api()); after a success
+  // the inbox is re-fetched and the tab re-renders, so the new status
+  // and the share result are what the server recorded — never an
+  // optimistic local guess. A failed action shows the error in
+  // #draft-note without re-rendering, so the draft stays in view.
+  const draftForAction = () => (caseDrafts[c.id] || []).find((x) => x.id === selectedDraftId) || (caseDrafts[c.id] || [])[0] || null;
+  $$('[data-draft-select]', $('#view')).forEach((b) => b.addEventListener('click', () => {
+    selectedDraftId = b.dataset.draftSelect;
+    shareConfirmId = null;
+    renderCase();
+  }));
+  $$('[data-draft-action]', $('#view')).forEach((b) => b.addEventListener('click', async () => {
+    const d = draftForAction();
+    if (!d) return;
+    const action = b.dataset.draftAction;
+    const fail = (e) => { const el = $('#draft-note'); if (el) { el.textContent = e.message; el.hidden = false; } };
+    if (action === 'share') { shareConfirmId = d.id; renderCase(); return; }
+    if (action === 'share-cancel') { shareConfirmId = null; renderCase(); return; }
+    if (action === 'share-confirm') {
+      try {
+        await api(`/api/drafts/${d.id}/share`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ caseId: c.id }) });
+        shareConfirmId = null;
+        await loadDraftsFor(c.id); renderCase();
+      } catch (e) {
+        // The server records a failed share on the draft (shareError),
+        // so re-fetch first — the detail then shows the failure — and
+        // put the error in the fresh note as well.
+        await loadDraftsFor(c.id); renderCase();
+        fail(e);
+      }
+      return;
+    }
+    try {
+      const act = action === 'review' ? 'review' : action === 'reject' ? 'reject' : 'archive';
+      await api(`/api/drafts/${d.id}/${act}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      await loadDraftsFor(c.id); renderCase();
+    } catch (e) { fail(e); }
+  }));
+  const revisionForm = $('#revision-form');
+  if (revisionForm) revisionForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const d = draftForAction();
+    if (!d) return;
+    const noteInput = $('#revision-note');
+    const errEl = $('#revision-error');
+    try {
+      await api(`/api/drafts/${d.id}/request-revision`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: noteInput ? noteInput.value : '' }) });
+      await loadDraftsFor(c.id); renderCase();
+      const fresh = $('#draft-note');
+      if (fresh) { fresh.textContent = 'Revision requested — recorded on this draft. Ask the facilitator in the room for the revision; it arrives here as a new draft.'; fresh.hidden = false; }
+    } catch (err) {
+      if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
+    }
+  });
 }
 function setClaimLocal(caseId, claimId, status, challenge) {
   claimLocal[caseId] = claimLocal[caseId] || {};
@@ -2185,9 +2419,7 @@ function showChallengeForm(c, claimId) {
   if (row) {
     row.insertAdjacentHTML('afterend', `<tr class="challenge-row"><td colspan="5">${formHtml}</td></tr>`);
   } else {
-    // Fallback: no matching row (e.g. Analysis tab) — render below the table.
-    const slot = $('#challenge-slot');
-    if (slot) slot.innerHTML = formHtml; else return;
+    return; // No matching row — nothing to attach the form to.
   }
   $('#challenge-cancel').addEventListener('click', () => { $$('.challenge-row', $('#view')).forEach((r) => r.remove()); const s = $('#challenge-slot'); if (s) s.innerHTML = ''; });
   $('#challenge-form').addEventListener('submit', async (e) => {
@@ -2387,6 +2619,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 (async function boot() {
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.addEventListener('click', logout);
   try {
     // A session token is required before any mutating call — establish
     // it first, and fail loudly (not silently) if the server will not

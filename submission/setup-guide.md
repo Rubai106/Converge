@@ -11,7 +11,7 @@ git clone https://github.com/Rubai106/accordweave.git
 cd accordweave
 npm install                  # installs Playwright (devDependency)
 npx playwright install chromium   # one-time browser download (see below)
-npm test               # expect 294/294 (verified 2026-11-07)
+npm test               # expect 351 (350 pass, 1 skipped — the opt-in live Switch test; verified 2026-11-07)
 npm run check          # node --check on server files
 PORT=3100 npm start
 # open http://localhost:3100

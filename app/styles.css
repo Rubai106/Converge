@@ -84,7 +84,11 @@ input::placeholder,textarea::placeholder{color:var(--faint)}
 .breadcrumb{font-size:16px;font-weight:600}
 .breadcrumb .crumb-sep{color:var(--faint);font-weight:400;margin:0 6px}
 .breadcrumb .crumb-soft{color:var(--soft);font-weight:500}
-.breadcrumb a{color:var(--soft);text-decoration:none}
+.breadcrumb a{color:var(--soft);text-decoration:underline}
+/* §31.3 (axe): breadcrumb links are underlined by default, not only
+   on hover — otherwise they fail WCAG 1.4.1 (link-in-text-block):
+   the muted link colour alone (1.84:1 vs surrounding text) does not
+   distinguish them from the surrounding text. */
 .breadcrumb a:hover{color:var(--cyan);text-decoration:underline}
 .topbar-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .search-wrap input{padding:8px 10px;width:260px;background:var(--panel)}
@@ -392,7 +396,26 @@ tr.disagree td:first-child{box-shadow:inset 2px 0 0 var(--amber-dot)}
 .transcript-list{margin:0;padding-left:22px}
 .transcript-list li{margin-bottom:10px;line-height:1.5}
 .transcript-list .pill{margin-left:4px}
+
+/* ---------- Agent drafts (§30, 2026-11-07) ---------- */
+.draft-list{display:flex;flex-direction:column;gap:8px}
+.draft-item{display:block;width:100%;text-align:left;background:var(--panel-2);border:1px solid var(--line);border-radius:4px;padding:10px 12px;color:var(--ink)}
+.draft-item:hover{border-color:var(--soft)}
+.draft-item.is-selected{border-color:var(--cyan);background:var(--cyan-bg)}
+.draft-item-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.draft-item-req{display:block;margin-top:6px;color:var(--soft)}
+.draft-text{white-space:pre-wrap}
+.caveat-list{margin:0;padding-left:22px}
+.caveat-list li{margin-bottom:6px}
+.revision-form label{font-size:13px;color:var(--soft);display:block;margin-bottom:6px}
+.revision-form textarea{width:100%;padding:8px 10px;resize:vertical}
 .rating-form{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end;margin-top:10px}
 .rating-form label{font-size:13px;color:var(--soft);display:flex;flex-direction:column;gap:4px}
 .rating-form select,.rating-form input{font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 8px;background:var(--input-bg)}
 .rating-form input[type="number"]{width:64px}
+
+/* L19: a completed wizard step is a button — inherit the stepper's
+   text style so it reads as a step, with a hover/focus cue that it
+   is clickable. */
+.wz-step-btn{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.wz-step-btn:hover,.wz-step-btn:focus-visible{color:var(--ink)}

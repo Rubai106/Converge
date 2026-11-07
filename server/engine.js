@@ -84,8 +84,108 @@ export function transitionCase(c, to, actor) {
 
 export function audit(c, actor, event, detail = {}) {
   c.audit = c.audit || [];
-  c.audit.push({ at: new Date().toISOString(), actor: actor?.name || 'system', kind: actor?.kind || 'system', event, ...detail });
+  // §31.1: chain the event. If the trail still holds unhashed legacy
+  // events, baseline them first (a no-op once a baseline exists), so
+  // the new event always chains from a hashed predecessor or GENESIS.
+  ensureAuditBaseline(c);
+  const prev = c.audit[c.audit.length - 1];
+  const prevHash = prev?.hash || AUDIT_CHAIN_GENESIS;
+  const fields = { at: new Date().toISOString(), actor: actor?.name || 'system', kind: actor?.kind || 'system', event, ...detail };
+  const hash = auditChainHash(prevHash, fields);
+  c.audit.push({ ...fields, prevHash, hash });
   return c.audit[c.audit.length - 1];
+}
+
+// ---------- Audit-trail hash chain (§31.1, 2026-11-07) ----------
+// The audit trail used to be a plain array in the same JSON file —
+// anyone with file access could edit or delete entries undetected
+// (audit M4). New audit events now chain: each carries prevHash (the
+// previous event's hash) and hash = SHA-256 of a canonical
+// serialisation of (prevHash + the event's own fields). The chain is
+// append-only: audit() above chains every new event.
+//
+// PLACEMENT NOTE: the brief said store.js, but audit() lives here in
+// engine.js (not store.js), and the chain helpers reuse canonicalJson
+// / sha256Hex defined below. Putting them here keeps the chain next to
+// the code that creates events. store.js load() imports
+// ensureAuditBaseline from here for the migration; engine.js does NOT
+// import store.js (that direction would make tests that statically
+// import the engine and then dynamically import the store with a
+// scratch CONVERGE_DATA_FILE evaluate the store before the env var is
+// set — and read the production file).
+//
+// LIMITATIONS, stated honestly (see docs/SECURITY.md): a hash chain on
+// a local JSON store DETECTS tampering only if the verifier holds an
+// independent copy of the head hash; it does not prevent someone with
+// write access from recomputing the whole chain, there is no
+// externally anchored checkpoint, and deleting the TAIL of the chain
+// (a truncated chain) still verifies — only a middle deletion breaks
+// the linkage. This is tamper EVIDENCE, not tamper-proof storage.
+export const AUDIT_CHAIN_GENESIS = 'GENESIS';
+
+// Hash for one chained event: SHA-256 of the canonical serialisation
+// of { prevHash, ...eventFields } — the event's own fields excluding
+// the `hash` field itself (which is what is being computed).
+export function auditChainHash(prevHash, eventFields) {
+  return sha256Hex(canonicalJson({ prevHash, ...eventFields }));
+}
+
+// A baseline event commits to every pre-existing (unhashed) audit
+// event: its hash is SHA-256 of the canonical serialisation of the
+// whole pre-existing array, in order. Old events are NEVER rewritten
+// — the baseline is appended after them, and new events chain from it.
+export function ensureAuditBaseline(c) {
+  const events = c.audit || [];
+  if (!events.length) return false;
+  if (events.some((e) => e.event === 'chain-baseline')) return false;
+  if (!events.some((e) => typeof e.hash !== 'string')) return false;
+  const hash = sha256Hex(canonicalJson(events));
+  const baselineCount = events.length; // evaluated before the push below
+  events.push({
+    at: new Date().toISOString(), actor: 'system', kind: 'system',
+    event: 'chain-baseline', prevHash: AUDIT_CHAIN_GENESIS, hash,
+    baselineCount,
+  });
+  return true;
+}
+
+// Verify an audit trail's hash chain. Returns { valid: true } or
+// { valid: false, firstBadIndex, reason }. Detects: a modified event
+// (its hash no longer matches its fields), a missing middle event (the
+// next event's prevHash no longer matches the previous event's hash),
+// reordered events (same break, or the baseline hash no longer
+// matches the pre-baseline array), and an invalid previous hash.
+// Unhashed (legacy) events are allowed ONLY before the baseline —
+// after it, an unhashed event means the chain was broken. A truncated
+// chain (tail deleted) still verifies: see the limitations above.
+export function verifyAuditChain(events) {
+  const list = events || [];
+  let expectedPrev = AUDIT_CHAIN_GENESIS;
+  let baselineSeen = false;
+  let hashedSeen = false;
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i];
+    if (e.event === 'chain-baseline') {
+      if (baselineSeen) return { valid: false, firstBadIndex: i, reason: 'duplicate chain-baseline event' };
+      if (hashedSeen) return { valid: false, firstBadIndex: i, reason: 'chain-baseline appears after chained events' };
+      if (e.prevHash !== AUDIT_CHAIN_GENESIS) return { valid: false, firstBadIndex: i, reason: 'baseline prevHash is not GENESIS' };
+      const committed = sha256Hex(canonicalJson(list.slice(0, i)));
+      if (e.hash !== committed) return { valid: false, firstBadIndex: i, reason: 'baseline hash does not match the pre-existing events (a pre-baseline event was modified, removed, or reordered)' };
+      baselineSeen = true;
+      expectedPrev = e.hash;
+      continue;
+    }
+    if (typeof e.hash !== 'string') {
+      if (baselineSeen || hashedSeen) return { valid: false, firstBadIndex: i, reason: 'unhashed event after the chain started' };
+      continue; // legacy event before the baseline — committed to by it
+    }
+    hashedSeen = true;
+    if (e.prevHash !== expectedPrev) return { valid: false, firstBadIndex: i, reason: 'prevHash does not match the previous event hash (an event is missing, reordered, or a prevHash was tampered with)' };
+    const { hash, ...fields } = e;
+    if (hash !== auditChainHash(e.prevHash, fields)) return { valid: false, firstBadIndex: i, reason: 'event hash does not match its fields (the event was modified)' };
+    expectedPrev = hash;
+  }
+  return { valid: true };
 }
 
 // ---------- Proposals: versioning, content hash, expiry (P0, 2026-11-07) ----------
@@ -373,6 +473,18 @@ export function courtTally(ratings) {
 
 // ---------- CORRECTION: claim extraction + statuses ----------
 export const CLAIM_STATUSES = ['Verified','Corrected','Clarified','Disputed','Unresolved'];
+
+// Stable claim id (§31.2, 2026-11-07): derived from the claim TEXT,
+// not its position. A transcript reorder or an inserted sentence must
+// never silently rebind an existing challenge or status to a different
+// claim (audit M6). Normalisation collapses whitespace and case so
+// trivial formatting edits do not churn the id; a real wording change
+// is a different claim and gets a new id (the old status is orphaned,
+// not rebound — see migrateCorrectionClaimKeys).
+export function stableClaimId(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return `C-${sha256Hex(normalized).slice(0, 8)}`;
+}
 export function extractClaims(transcript) {
   // Rule-based only: sentences containing a number, year, title, or
   // a verifiable verb (led/co-led, founded, published, won). Opinions
@@ -383,12 +495,57 @@ export function extractClaims(transcript) {
     const hasNumber = /\d/.test(text);
     const hasVerifiable = /(led|co-led|founded|published|won|survey|professor|lecturer|director|ceo|%|percent)/i.test(text);
     return {
-      id: `C${i + 1}`, text, timestamp: null,
+      id: stableClaimId(text), legacyId: `C${i + 1}`, text, timestamp: null,
       kind: isOpinion ? 'opinion' : (hasNumber || hasVerifiable ? 'factual-assertion' : 'unclassified'),
       status: isOpinion ? 'Clarified' : 'Unresolved',
       evidence: [], guestChallenge: null,
     };
   }).filter((c) => c.kind === 'factual-assertion');
+}
+
+// One-time migration for stored CORRECTION claim records (§31.2).
+// claimStatuses / claimChallenges / claimChallengeHistory were keyed
+// by POSITIONAL ids (C1/C2/C3). Re-key them to the stable ids of the
+// claims at those legacy positions in the CURRENT transcript, and
+// preserve anything that no longer maps as orphaned (never silently
+// dropped). ASSUMPTION, documented: the migration is correct only if
+// the transcript has not changed since the statuses were set — true
+// for the production COR-003 (seed transcript, statuses set against
+// it). After migration, all keys are stable ids, so later reorders
+// and edits can never rebind a status to a different claim; a
+// changed claim's old status is orphaned, not moved. Idempotent:
+// after migration no legacy keys remain, so it is a no-op.
+export function migrateCorrectionClaimKeys(c) {
+  if (!c || c.workflow !== 'CORRECTION') return false;
+  const claims = extractClaims(c.transcript);
+  const byLegacy = new Map(claims.map((cl) => [cl.legacyId, cl.id]));
+  const byStable = new Set(claims.map((cl) => cl.id));
+  let changed = false;
+  const maps = [
+    ['claimStatuses', 'orphanedClaimStatuses'],
+    ['claimChallenges', 'orphanedClaimChallenges'],
+    ['claimChallengeHistory', 'orphanedClaimChallengeHistory'],
+  ];
+  for (const [key, orphanKey] of maps) {
+    const m = c[key];
+    if (!m || typeof m !== 'object') continue;
+    for (const oldId of Object.keys(m)) {
+      if (byStable.has(oldId)) continue; // already a stable id
+      const stableId = byLegacy.get(oldId);
+      if (stableId) {
+        // Only move if the stable slot is empty — a duplicate legacy
+        // key must never overwrite a status already recorded there.
+        if (m[stableId] === undefined) m[stableId] = m[oldId];
+        delete m[oldId];
+      } else {
+        c[orphanKey] = c[orphanKey] || {};
+        c[orphanKey][oldId] = m[oldId];
+        delete m[oldId];
+      }
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 // CORRECTION claim -> evidence linkage, computed server-side from the

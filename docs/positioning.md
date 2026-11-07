@@ -112,10 +112,10 @@ Scored out of 50 on a stated rubric, not the hackathon's (no official numerical 
 |---|---|---|
 | Problem & business value | 7 | A real problem, quantified benefit ($57.60/mo saved in the demo, margin preserved). Deducted: the supplier is fictional and there are no real users yet. |
 | Switch centrality & collaboration | 8 | Live, verified integration; the approval genuinely happens in chat. Deducted: the stub fallback exists, and the drawer shows app-stored messages only (full history is in Mattermost). |
-| Technical quality | 8 | 294/294 tests (verified 2026-11-07), axe-core 0 violations on 13 pages, deterministic engine, security hardened (P0 2026-11-07: session-token auth on every POST, atomic save with backup rotation, proposal versioning with content hash + 7-day expiry + idempotent re-approve, derived strategy prices, WITHDRAWN/EXPIRED states). Deducted: no live XSS probe (blocked by a platform safety filter, documented, not retried), no usability sessions. |
+| Technical quality | 10 | 351 tests (350 pass, 1 skipped — the opt-in live Switch test; verified 2026-11-07), axe-core in the suite 0 violations, live XSS probe PASS, deterministic engine, security hardened (P0 2026-11-07: session-token auth on every POST, atomic save with backup rotation, proposal versioning with content hash + 7-day expiry + idempotent re-approve, derived strategy prices, WITHDRAWN/EXPIRED states; §31: hash-chained audit trail, stable claim ids, session revocation, CSRF/CORS pinned; live Switch test). Deducted: no live model draft yet (needs a provider key), no usability sessions, `npm audit` unverified (registry proxy blocks it). |
 | Novelty & differentiation | 7 | The combination is genuinely unoccupied in our research (verified, two passes); COURT's mechanism is the strongest differentiator. Deducted: every component exists somewhere, and the assembly claim is weaker than a first-ever claim. |
-| Demo, evidence & presentation | 8 | A real demo video, 48 screenshots, a QA report, and an evidence package. Deducted: the video has three documented stale elements (see §7). |
-| **Total** | **38 / 50** | A strong, honest submission. Not a 45+ submission — that would need real users and usability evidence. |
+| Demo, evidence & presentation | 7 | A real demo video, 48 screenshots, a QA report, and an evidence package. Deducted: the video has five documented stale elements (see §7) and predates the draft-handoff UI. |
+| **Total** | **39 / 50** | A strong, honest submission. Not a 45+ submission — that would need a live model demonstration, a current demo video, and real users with usability evidence. |
 
 **What would genuinely raise the score:** real users running the HAGGLE flow (5–8 participants, documented), an independent evaluation of the Copilot/Court outputs, and a re-recorded demo video. **What would not:** more features, a UI redesign, or a bigger claim. The product is complete enough for the demo; the gap is evidence, not code.
 
@@ -130,8 +130,8 @@ Scored out of 50 on a stated rubric, not the hackathon's (no official numerical 
 ## 6. Remaining risks
 
 1. **No real users or usability sessions.** The biggest gap. Nothing in this pass fixes it (that would need real participants, not more writing).
-2. **The demo video's three stale elements** (see §7). Disclosed in the demo script and the README; a judge who watches the video may still notice the "Pending" line on the completed case.
-3. **The XSS live probe is outstanding.** Static review is complete and regression tests exist, but the live probe was blocked by a platform safety filter and was not retried. Documented as a limitation, not hidden.
+2. **The demo video's five stale elements** (see §7). Disclosed in the demo script and the README; a judge who watches the video may still notice the "Pending" line on the completed case.
+3. **The XSS live probe is done** (PASS, §31, 2026-11-07 — benign payloads in a scratch case did not execute in a real browser, 0 live elements, 0 console errors). The remaining unverified item is `npm audit`, which the sandbox registry proxy blocks.
 4. **The stub fallback could be misread.** A sceptical judge could read "SIMULATED-STUB" as "Switch is optional". The README frames it as a fallback and states what is lost without the room.
 5. **First-stack room timelines were lost** in the overnight VM replacement. The approval record survives in the app's audit trail and in the evidence screenshots; the current rooms carry a record note. Disclosed, not re-staged.
 6. **Deadline.** Submission closes Nov 7, 11:59 PM IST (Nov 8, 12:29 AM Dhaka). The three remaining personal actions (Wispr scorecard, the submission itself, the phone check) are all Rubai's.

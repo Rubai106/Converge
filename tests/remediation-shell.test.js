@@ -91,8 +91,14 @@ test('M22: tab arrow-key navigation scrolls the focused tab into view', () => {
     'focused tab must be scrolled into view after focus()');
 });
 
-test('L2: clickable case rows carry role=button and an aria-label', () => {
-  assert.ok(js.includes('role="button" aria-label="Open case'), 'case rows must expose their action');
+test('L2: clickable case rows carry role=button and a content-derived name', () => {
+  // §31.3 (axe): the rows used to carry aria-label="Open case …",
+  // which overrode the content-derived name and failed WCAG 2.5.3
+  // (label-content-name-mismatch) because it did not contain all the
+  // row's visible text. The name now comes from the row's own visible
+  // content — so the row must have role="button" and NO aria-label.
+  assert.ok(js.includes('role="button"'), 'case rows must expose their action');
+  assert.ok(!js.includes('aria-label="Open case'), 'case rows must not override the content-derived name');
   // AXE-1 (fix-round 2026-11-06): the Workflows rows carry an inner
   // demo-case link, so they must NOT also carry role="button" (a link
   // inside a button-role row is a nested-interactive axe violation).

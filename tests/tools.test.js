@@ -108,7 +108,8 @@ test('draft_correction_assessment extracts claims with evidence refs', async () 
   const d = await r.callTool('draft_correction_assessment', { caseId: 'COR-003' });
   assert.equal(d.draft, true);
   assert.equal(d.claims.length, 3);
-  assert.equal(d.claims[0].id, 'C1');
+  assert.match(d.claims[0].id, /^C-[0-9a-f]{8}$/); // stable content-derived id
+  assert.equal(d.claims[0].legacyId, 'C1');
   assert.deepEqual(d.claims[0].evidence, ['E1']);
   assert.deepEqual(d.claims[1].evidence, ['E2']);
   assert.deepEqual(d.claims[2].evidence, []);

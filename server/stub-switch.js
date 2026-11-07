@@ -50,12 +50,30 @@ export function stubCallOp(state, opName, args = {}) {
       room = { id: `room-${Date.now()}`, name: args.room || args.roomId || 'unnamed', members: [], messages: [] };
       state.rooms.push(room);
     }
-    const msg = { at: new Date().toISOString(), author: args.author || 'agent', text: args.text || '', simulated: true };
+    const msg = { id: `stub-msg-${room.messages.length + 1}-${Date.now()}`, at: new Date().toISOString(), author: args.author || 'agent', text: args.text || '', simulated: true };
     room.messages.push(msg); return msg;
   }
   if (opName === 'read_context') {
+    // L25: return the REAL shape {result:{threads:[{root, replies}]}}
+    // so switchTimelineToMessages can be exercised against the stub.
+    // A flat message array is not the real contract.
     const room = state.rooms.find((r) => r.id === args.roomId || r.name === args.room);
-    return room ? room.messages : [];
+    if (!room) return { result: { threads: [] } };
+    return {
+      result: {
+        threads: room.messages.map((m) => ({
+          root: {
+            id: m.id || 'stub-msg-unknown',
+            kind: 'message',
+            sender_name: m.author || 'unknown',
+            sender: m.author || 'unknown',
+            timestamp: m.at || null,
+            body: m.text || '',
+          },
+          replies: [],
+        })),
+      },
+    };
   }
   return { ok: true, op: opName, simulated: true };
 }

@@ -230,9 +230,12 @@ export function createToolRegistry(deps = {}) {
           requiresHumanApproval: true,
           claims: claims.map((cl) => ({
             id: cl.id,
+            legacyId: cl.legacyId,
             text: cl.text,
             kind: cl.kind,
-            status: (c.claimStatuses || {})[cl.id] || cl.status,
+            // §31.2: status by stable id first, then the legacy
+            // positional id (a case whose keys have not migrated yet).
+            status: (c.claimStatuses || {})[cl.id] ?? (c.claimStatuses || {})[cl.legacyId] ?? cl.status,
             evidence: refs[cl.id] || [],
           })),
         };

@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { switchTimelineToMessages } from '../server/switch-client.js';
+import { createStubState, stubCallOp } from '../server/stub-switch.js';
 import { seedData } from '../server/store.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -96,8 +97,11 @@ test('fixround AXE-1: the Workflows demo-case row carries no role="button", the 
 });
 
 test('fixround AXE-1/L2: clickable rows WITHOUT inner links keep role="button"', () => {
-  assert.ok(src.includes('role="button" aria-label="Open case ${esc(c.id)}'), 'dashboard rows keep role="button"');
-  assert.ok(src.includes('role="button" aria-label="Open case ${esc(e.caseId)}'), 'evidence rows keep role="button"');
+  // §31.3 (axe): the aria-label="Open case …" override was removed —
+  // it failed WCAG 2.5.3 (label-content-name-mismatch). The rows keep
+  // role="button" and their name comes from their visible content.
+  assert.ok(src.includes('role="button"'), 'dashboard rows keep role="button"');
+  assert.ok(!src.includes('aria-label="Open case'), 'no row overrides its content-derived name');
 });
 
 // ---------- M21: drawer shows the room timeline, no mandate box ----------
@@ -147,6 +151,24 @@ test('fixround M21: switchTimelineToMessages tolerates an empty or missing resul
   assert.deepEqual(switchTimelineToMessages({}), []);
   assert.deepEqual(switchTimelineToMessages({ result: { threads: [] } }), []);
   assert.deepEqual(switchTimelineToMessages(null), []);
+});
+
+test('fixround L25: the stub read_context returns the real {result:{threads}} shape, and switchTimelineToMessages reads it', () => {
+  const state = createStubState();
+  stubCallOp(state, 'post_message', { room: '#haggle-dairyco', author: 'user', text: 'Hello stub room' });
+  stubCallOp(state, 'post_message', { room: '#haggle-dairyco', author: 'agent', text: 'Stub reply' });
+  const ctx = stubCallOp(state, 'read_context', { room: '#haggle-dairyco' });
+  assert.ok(ctx.result && Array.isArray(ctx.result.threads), 'stub read_context returns {result:{threads}}');
+  assert.equal(ctx.result.threads.length, 2);
+  const msgs = switchTimelineToMessages(ctx);
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].author, 'user');
+  assert.equal(msgs[0].text, 'Hello stub room');
+  assert.equal(msgs[1].author, 'agent');
+  assert.equal(msgs[1].text, 'Stub reply');
+  assert.equal(msgs[0].real, true);
+  // An unknown room reads empty, in the real shape.
+  assert.deepEqual(stubCallOp(state, 'read_context', { room: '#nope' }), { result: { threads: [] } });
 });
 
 // ---------- GAP-1 + messages endpoint: live server on a scratch file ----------

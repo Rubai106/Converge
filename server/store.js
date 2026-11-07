@@ -4,6 +4,12 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync, openSync, fsyncSync, closeSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// ensureAuditBaseline lives in engine.js next to audit() (see the
+// §31.1 note there): engine.js must NOT import store.js, or tests
+// that statically import the engine and then dynamically import this
+// store with a scratch CONVERGE_DATA_FILE would evaluate the store
+// before the env var is set and read the production file.
+import { ensureAuditBaseline } from './engine.js';
 
 // CONVERGE_DATA_FILE lets tests point the store at a scratch file
 // instead of the shared demo data (the full suite runs test files in
@@ -189,6 +195,13 @@ export function load() {
     if (c.state !== 'AWAITING_APPROVAL' && c.pendingApproval) {
       c.pendingApproval = null; changed = true;
     }
+  }
+  // §31.1 (2026-11-07): establish the audit hash-chain baseline for
+  // any case whose audit trail still has unhashed (pre-chain) events.
+  // ensureAuditBaseline appends ONE baseline event committing to the
+  // existing events; the old events themselves are never rewritten.
+  for (const c of d.cases) {
+    if (ensureAuditBaseline(c)) changed = true;
   }
   if (changed) save(d);
   return d;

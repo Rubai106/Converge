@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { haggleAnalysis, haggleStrategies } from '../server/engine.js';
+import { haggleAnalysis, haggleStrategies, TRANSITIONS as SERVER_TRANSITIONS } from '../server/engine.js';
 import { seedData } from '../server/store.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -56,7 +56,7 @@ const termsForStrategy = new Function(
   `${consts}\n${fnBody('termsForStrategy')}\nreturn termsForStrategy;`,
 )();
 const haggleTimeline = new Function(
-  `${consts}\n${extract(/const PROPOSAL_TO_STRATEGY = \{[^}]+\};/, 'PROPOSAL_TO_STRATEGY')}\n${fnBody('approvedStrategy')}\n${fnBody('haggleTimeline')}\nreturn haggleTimeline;`,
+  `${consts}\n${extract(/const PROPOSAL_TO_STRATEGY = \{[^}]+\};/, 'PROPOSAL_TO_STRATEGY')}\n${fnBody('approvedStrategy')}\n${fnBody('termsPrice')}\n${fnBody('haggleTimeline')}\nreturn haggleTimeline;`,
 )();
 const stepperInfo = new Function(
   `${extract(/const STEP_INDEX = \{[^}]+\};/, 'STEP_INDEX')}\n${extract(/const TERMINAL_NEG = \[[^\]]+\];/, 'TERMINAL_NEG')}\n${fnBody('stepperInfo')}\nreturn stepperInfo;`,
@@ -115,6 +115,34 @@ test('dark: the timeline shows the real pending counter-offer, never a fabricate
   assert.equal(rows[2].who, 'DairyCo rep · P2');
   assert.equal(rows[3].label, 'Approval — pending owner decision');
   assert.ok(!JSON.stringify(rows).includes('$0.19'), 'no $0.19 counter-offer may appear anywhere');
+});
+
+test('dark: an approved case shows the AGREED price in the price column, matching its label', () => {
+  // Production HAG-014: approved P2 at "$0.19/fl oz for 6 weeks"
+  // (2026-11-05) while the engine now derives the counter at $0.18.
+  // The timeline must show $0.19 in both the price column and the
+  // label — never $0.18 in the column next to a $0.19 label.
+  const c = hagCase({
+    state: 'COMPLETED',
+    pendingApproval: null,
+    approval: { proposalId: 'P2', terms: '$0.19/fl oz for 6 weeks', approvedBy: 'Owner', approvedAt: '2026-11-05T17:53:39.578Z' },
+  });
+  const rows = haggleTimeline(c);
+  assert.equal(rows[2].label, 'Counter-offer — $0.19/fl oz for 6 weeks');
+  assert.equal(rows[2].price, '$0.19', 'the counter-offer price column is the agreed price');
+  assert.equal(rows[3].label, 'Approved — $0.19/fl oz for 6 weeks');
+  assert.equal(rows[3].price, '$0.19', 'the approved price column is the agreed price');
+});
+
+test('dark L9: the client TRANSITIONS table is pinned equal to the server table', () => {
+  // The client mirrors server/engine.js TRANSITIONS for the Move
+  // dropdown. They diverged once (WITHDRAWN/EXPIRED were added to the
+  // server by P0 but never to the client), so the Move dropdown could
+  // not offer them. This test fails the suite if they ever drift again.
+  const clientTransitions = new Function(
+    `${extract(/const TRANSITIONS = \{[\s\S]*?\n\};/, 'TRANSITIONS')}\nreturn TRANSITIONS;`,
+  )();
+  assert.deepEqual(clientTransitions, SERVER_TRANSITIONS);
 });
 
 test('dark: with nothing pending, the timeline has no counter-offer row at all', () => {

@@ -121,7 +121,11 @@ test('correction next step: unresolved claims point at Negotiation', () => {
 });
 
 test('correction next step: every claim resolved points at the errata', () => {
-  const c = correctionCase({}, { C1: 'Corrected', C2: 'Corrected', C3: 'Corrected' });
+  // Statuses are keyed by the stable content-derived claim ids (§31.2).
+  const allCorrected = Object.fromEntries(
+    extractClaims(correctionCase().transcript).map((cl) => [cl.id, 'Corrected']),
+  );
+  const c = correctionCase({}, allCorrected);
   const ns = correctionNextStep(c);
   assert.equal(ns.button, 'Review the errata →');
   assert.equal(ns.tab, 'negotiation');

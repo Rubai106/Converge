@@ -11,6 +11,15 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { seedData } from '../server/store.js';
+import { extractClaims } from '../server/engine.js';
+import { nextHaggleId } from '../server/server.js';
+
+// §31.2: claim ids are stable content-derived ids (C-<8 hex>), not
+// positional C1/C2/C3. The seed transcript's claims, in order, with
+// their legacy positional ids for the backward-compat check.
+const SEED_COR_TRANSCRIPT = seedData().cases.find((x) => x.id === 'COR-003').transcript;
+const SEED_CLAIMS = extractClaims(SEED_COR_TRANSCRIPT);
+const claimId = (legacyId) => SEED_CLAIMS.find((cl) => cl.legacyId === legacyId).id;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const scratchDir = mkdtempSync(join(tmpdir(), 'converge-server-'));
@@ -158,40 +167,55 @@ test('COURT: completing the ratings reveals the mapping and the tally', async ()
 test('CORRECTION: claim status persists across reads and is audited', async () => {
   const r = await fetch(`${base}/api/correction/claim`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
-    body: JSON.stringify({ caseId: 'COR-003', id: 'C1', status: 'Corrected', actor: 'Host', actorKind: 'human' }),
+    body: JSON.stringify({ caseId: 'COR-003', id: claimId('C1'), status: 'Corrected', actor: 'Host', actorKind: 'human' }),
   });
   assert.equal(r.status, 200);
   const c = await (await fetch(`${base}/api/cases/COR-003`)).json();
-  assert.equal(c.claims.find((x) => x.id === 'C1').status, 'Corrected');
-  assert.ok(c.audit.some((a) => a.event === 'claim-status' && a.claim === 'C1' && a.status === 'Corrected'));
+  assert.equal(c.claims.find((x) => x.id === claimId('C1')).status, 'Corrected');
+  assert.ok(c.audit.some((a) => a.event === 'claim-status' && a.claim === claimId('C1') && a.status === 'Corrected'));
   // P0 (2026-11-07): the actor comes from the session, never the body.
   // No token: 401, and the claim is untouched.
   const noToken = await fetch(`${base}/api/correction/claim`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ caseId: 'COR-003', id: 'C2', status: 'Verified' }),
+    body: JSON.stringify({ caseId: 'COR-003', id: claimId('C2'), status: 'Verified' }),
   });
   assert.equal(noToken.status, 401);
   let after = await (await fetch(`${base}/api/cases/COR-003`)).json();
-  assert.equal(after.claims.find((x) => x.id === 'C2').status, 'Unresolved');
+  assert.equal(after.claims.find((x) => x.id === claimId('C2')).status, 'Unresolved');
   // A body that claims actorKind 'agent' is ignored: the session actor
   // is human, so the change succeeds and records the session actor.
   const agentBody = await fetch(`${base}/api/correction/claim`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
-    body: JSON.stringify({ caseId: 'COR-003', id: 'C2', status: 'Verified', actor: 'Verification Agent', actorKind: 'agent' }),
+    body: JSON.stringify({ caseId: 'COR-003', id: claimId('C2'), status: 'Verified', actor: 'Verification Agent', actorKind: 'agent' }),
   });
   assert.equal(agentBody.status, 200);
   after = await (await fetch(`${base}/api/cases/COR-003`)).json();
-  assert.equal(after.claims.find((x) => x.id === 'C2').status, 'Verified');
+  assert.equal(after.claims.find((x) => x.id === claimId('C2')).status, 'Verified');
+});
+
+test('CORRECTION: the legacy positional id is still accepted (backward compat)', async () => {
+  // Old clients (and old audit references) send C1/C2/C3; the endpoint
+  // resolves them to the same stable claim and stores under the stable id.
+  const r = await fetch(`${base}/api/correction/claim`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
+    body: JSON.stringify({ caseId: 'COR-003', id: 'C1', status: 'Clarified' }),
+  });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.id, claimId('C1'));
+  assert.equal(body.status, 'Clarified');
+  const c = await (await fetch(`${base}/api/cases/COR-003`)).json();
+  assert.equal(c.claims.find((x) => x.id === claimId('C1')).status, 'Clarified');
 });
 
 test('CORRECTION: guest challenge with evidence persists on the claim', async () => {
   const r = await fetch(`${base}/api/correction/claim`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Converge-Session': token },
-    body: JSON.stringify({ caseId: 'COR-003', id: 'C2', status: 'Disputed', actor: 'Dr Amara Osei (guest)', actorKind: 'human', challenge: { text: 'Paper says 38%', evidence: 'E2' } }),
+    body: JSON.stringify({ caseId: 'COR-003', id: claimId('C2'), status: 'Disputed', actor: 'Dr Amara Osei (guest)', actorKind: 'human', challenge: { text: 'Paper says 38%', evidence: 'E2' } }),
   });
   assert.equal(r.status, 200);
   const c = await (await fetch(`${base}/api/cases/COR-003`)).json();
-  const cl = c.claims.find((x) => x.id === 'C2');
+  const cl = c.claims.find((x) => x.id === claimId('C2'));
   assert.equal(cl.status, 'Disputed');
   assert.equal(cl.guestChallenge.text, 'Paper says 38%');
   assert.equal(cl.guestChallenge.evidence, 'E2');
@@ -199,4 +223,19 @@ test('CORRECTION: guest challenge with evidence persists on the claim', async ()
   // guest — its attribution is the guest participant on the case, not
   // the session actor operating the UI.
   assert.equal(cl.guestChallenge.by, 'Dr Amara Osei (guest)');
+});
+
+// ---------- nextHaggleId (L1/L3: no Date.now() fallback) ----------
+
+test('nextHaggleId: padded sequence; no HAG ids gives HAG-001, never a timestamp id', () => {
+  assert.equal(nextHaggleId({ cases: [] }), 'HAG-001');
+  assert.equal(nextHaggleId({ cases: [{ id: 'CRT-007' }, { id: 'COR-003' }] }), 'HAG-001');
+  assert.equal(nextHaggleId({ cases: [{ id: 'HAG-014' }] }), 'HAG-015');
+  assert.equal(nextHaggleId({ cases: [{ id: 'HAG-014' }, { id: 'HAG-015' }] }), 'HAG-016');
+  // A taken id is skipped, never duplicated.
+  assert.equal(nextHaggleId({ cases: [{ id: 'HAG-001' }, { id: 'HAG-002' }] }), 'HAG-003');
+  // Non-HAG ids do not affect the sequence.
+  assert.equal(nextHaggleId({ cases: [{ id: 'HAG-009' }, { id: 'CRT-007' }] }), 'HAG-010');
+  // The id is always the padded HAG-NNN form.
+  assert.match(nextHaggleId({ cases: [] }), /^HAG-\d{3}$/);
 });

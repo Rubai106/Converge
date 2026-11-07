@@ -10,8 +10,10 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { haggleAnalysis, haggleStrategies, normalizeHaggleInputs, courtConflicts, courtTally, extractClaims, claimEvidenceRefs, setClaimStatus, transitionCase, audit, canTransition, adoptCanonical, expirePendingApproval, proposalInputHash, proposalContentHash } from './engine.js';
+import { sanitizePublicError, revokeSession } from './security.js';
+import { haggleAnalysis, haggleStrategies, normalizeHaggleInputs, courtConflicts, courtTally, extractClaims, claimEvidenceRefs, setClaimStatus, transitionCase, audit, canTransition, adoptCanonical, expirePendingApproval, proposalInputHash, proposalContentHash, migrateCorrectionClaimKeys } from './engine.js';
 import { load, save, getCase } from './store.js';
+import { listDraftsByCase, getDraft, updateDraft } from './drafts.js';
 import { createStubState, stubHealth, stubGetOps, stubCallOp } from './stub-switch.js';
 import { probeHealth, getOps, callOp, withRoomConnection, switchTimelineToMessages, SWITCH_VERSION } from './switch-client.js';
 
@@ -72,13 +74,14 @@ const HAGGLE_NUMERIC_RANGES = {
 const slugify = (s) => String(s).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 function nextHaggleId(d) {
+  // Padded sequence, collision-safe: when no HAG-* id parses, max
+  // stays 0 and the first id is HAG-001 (no Date.now() fallback —
+  // two creations in the same millisecond must never collide).
   let max = 0;
-  let any = false;
   for (const c of d.cases) {
     const m = /^HAG-(\d+)$/.exec(c.id || '');
-    if (m) { any = true; max = Math.max(max, Number(m[1])); }
+    if (m) { max = Math.max(max, Number(m[1])); }
   }
-  if (!any) return `HAG-${Date.now()}`; // Fallback when no HAG-* id parses.
   let n = max + 1;
   let id = `HAG-${String(n).padStart(3, '0')}`;
   while (d.cases.some((c) => c.id === id)) { n += 1; id = `HAG-${String(n).padStart(3, '0')}`; }
@@ -319,6 +322,18 @@ const server = createServer(async (req, res) => {
       }
       req.session = session;
     }
+    // --- API: session revocation (§31.3, 2026-11-07) ---
+    // Requires a valid session token (the POST gate above already
+    // validated it). Revokes the token presented — an authenticated
+    // self-revocation; the next mutation with this token gets 401.
+    // The client Log out button calls this, then clears its cached
+    // token. Note the next mutating call re-issues a fresh session
+    // automatically (the demo has no login screen); revocation ends
+    // THIS session, it does not lock the browser out.
+    if (url.pathname === '/api/session/revoke' && req.method === 'POST') {
+      const revoked = revokeSession(sessions, req.headers['x-converge-session']);
+      return send(res, 200, { revoked });
+    }
     // --- static app ---
     if (url.pathname === '/' || url.pathname.startsWith('/app/')) {
       const p = url.pathname === '/' ? '/app/index.html' : url.pathname;
@@ -421,6 +436,10 @@ const server = createServer(async (req, res) => {
         out.samples = out.ratingsComplete ? (c.samples || []) : (c.samples || []).map((s) => ({ code: s.code }));
       }
       if (c.workflow === 'CORRECTION') {
+        // §31.2: one-time migration of legacy positional claim keys
+        // (C1/C2/C3) to stable content-derived ids; orphaned records
+        // are preserved on the case, never silently dropped.
+        if (migrateCorrectionClaimKeys(c)) save(data);
         const claims = extractClaims(c.transcript).map((cl) => ({
           ...cl,
           status: c.claimStatuses?.[cl.id] || cl.status,
@@ -430,6 +449,9 @@ const server = createServer(async (req, res) => {
         // (matched against the case's evidence notes), not a client map.
         const refs = claimEvidenceRefs(claims, c.evidence || []);
         out.claims = claims.map((cl) => ({ ...cl, evidence: refs[cl.id] || [] }));
+        if (c.orphanedClaimStatuses && Object.keys(c.orphanedClaimStatuses).length) {
+          out.orphanedClaimStatuses = c.orphanedClaimStatuses;
+        }
       }
       return send(res, 200, out);
     }
@@ -624,9 +646,22 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const c = body.caseId ? getCase(data, body.caseId) : data.cases.find((x) => x.workflow === 'CORRECTION');
       if (!c) return send(res, 404, { error: 'CORRECTION case not found' });
+      // §31.2: migrate legacy positional claim keys to stable ids
+      // before resolving — after migration, stored keys are stable.
+      if (migrateCorrectionClaimKeys(c)) save(data);
       const claims = extractClaims(c.transcript);
-      const base = claims.find((cl) => cl.id === body.id);
-      if (!base) return send(res, 404, { error: `Claim ${body.id} not found` });
+      // Accept BOTH ids: the stable content-derived id (current) and
+      // the legacy positional id (C1/C2/C3, for old clients and old
+      // audit references). Both resolve to the same claim; all stored
+      // records are keyed by the stable id.
+      const base = claims.find((cl) => cl.id === body.id) || claims.find((cl) => cl.legacyId === body.id);
+      if (!base) {
+        const orphaned = c.orphanedClaimStatuses?.[body.id] ?? c.claimStatuses?.[body.id];
+        if (orphaned !== undefined) {
+          return send(res, 404, { error: `Claim ${body.id} no longer matches any current claim — its text changed and its status was preserved as orphaned, not rebound to another claim.`, orphaned: true, storedStatus: orphaned });
+        }
+        return send(res, 404, { error: `Claim ${body.id} not found` });
+      }
       const claim = { ...base, status: c.claimStatuses?.[base.id] || base.status };
       try {
         // Human-only: the session actor is always human; body.actor /
@@ -659,6 +694,141 @@ const server = createServer(async (req, res) => {
         save(data);
         return send(res, 200, claim);
       } catch (e) { return send(res, 400, { error: String(e.message || e) }); }
+    }
+    // --- API: agent drafts — the human-mediated handoff (§30) ---
+    // The runtime appends drafts to the local inbox (server/drafts.js);
+    // it never calls these endpoints and never holds a session token.
+    // Every mutation here requires a valid human session (the central
+    // POST gate above 401s without one). Sharing a draft is NOT an
+    // approval: the posted text says so, and the owner must still
+    // separately approve any consequential agreement.
+    if (url.pathname === '/api/drafts' && req.method === 'GET') {
+      const caseId = url.searchParams.get('caseId') || '';
+      if (!caseId) return send(res, 400, { error: 'caseId is required.' });
+      const c = getCase(data, caseId);
+      if (!c) return send(res, 404, { error: 'case not found' });
+      return send(res, 200, { caseId, drafts: listDraftsByCase(caseId) });
+    }
+    const draftMatch = url.pathname.match(/^\/api\/drafts\/([\w-]+)\/(review|share|reject|archive|request-revision)$/);
+    if (draftMatch && req.method === 'POST') {
+      const [, draftId, action] = draftMatch;
+      const body = await readBody(req);
+      const draft = getDraft(draftId);
+      if (!draft) return send(res, 404, { error: 'draft not found' });
+      const actor = req.session.actor;
+      const now = new Date().toISOString();
+      // The case audit is a secondary record (the drafts file is the
+      // authoritative state). A failed case save must never turn a
+      // completed draft action into a 500 — it is logged, not hidden.
+      const auditCase = (event, detail) => {
+        try {
+          const c = getCase(data, draft.caseId);
+          if (c) { audit(c, actor, event, detail); save(data); }
+        } catch (e) { console.error('CONVERGE draft audit failed:', e); }
+      };
+      if (action === 'review') {
+        if (draft.status === 'UNDER_REVIEW') return send(res, 200, draft);
+        if (draft.status !== 'GENERATED') {
+          return send(res, 400, { error: `Cannot review a draft in status ${draft.status}.` });
+        }
+        const updated = updateDraft(draftId, (d) => { d.status = 'UNDER_REVIEW'; d.reviewedBy = actor.name; d.reviewedAt = now; });
+        auditCase('draft-reviewed', { draftId, caseId: draft.caseId });
+        return send(res, 200, updated);
+      }
+      if (action === 'reject') {
+        if (draft.status === 'REJECTED') return send(res, 200, draft);
+        if (draft.status !== 'GENERATED' && draft.status !== 'UNDER_REVIEW') {
+          return send(res, 400, { error: `Cannot reject a draft in status ${draft.status}.` });
+        }
+        const updated = updateDraft(draftId, (d) => { d.status = 'REJECTED'; d.rejectedBy = actor.name; d.rejectedAt = now; });
+        auditCase('draft-rejected', { draftId, caseId: draft.caseId });
+        return send(res, 200, updated);
+      }
+      if (action === 'archive') {
+        if (draft.status === 'ARCHIVED') return send(res, 200, draft);
+        const updated = updateDraft(draftId, (d) => { d.status = 'ARCHIVED'; d.archivedBy = actor.name; d.archivedAt = now; });
+        auditCase('draft-archived', { draftId, caseId: draft.caseId });
+        return send(res, 200, updated);
+      }
+      if (action === 'request-revision') {
+        if (draft.status !== 'GENERATED' && draft.status !== 'UNDER_REVIEW') {
+          return send(res, 400, { error: `Cannot request a revision for a draft in status ${draft.status}.` });
+        }
+        const note = typeof body.note === 'string' ? body.note.trim().slice(0, 1000) : '';
+        const updated = updateDraft(draftId, (d) => {
+          d.status = 'UNDER_REVIEW';
+          d.revisionRequested = { note, by: actor.name, at: now };
+          d.revisionHistory = d.revisionHistory || [];
+          d.revisionHistory.push({ note, by: actor.name, at: now });
+        });
+        auditCase('draft-revision-requested', { draftId, caseId: draft.caseId });
+        return send(res, 200, updated);
+      }
+      // --- share: the human-mediated Mattermost publication ---
+      if (draft.status === 'SHARED') {
+        return send(res, 409, { error: 'This draft has already been shared.' });
+      }
+      if (draft.status !== 'GENERATED' && draft.status !== 'UNDER_REVIEW') {
+        return send(res, 400, { error: `Cannot share a draft in status ${draft.status}.` });
+      }
+      const caseId = typeof body.caseId === 'string' ? body.caseId : '';
+      if (!caseId) return send(res, 400, { error: 'caseId is required.' });
+      if (draft.caseId !== caseId) {
+        return send(res, 400, { error: `Draft ${draftId} belongs to case ${draft.caseId}, not ${caseId}.` });
+      }
+      const c = getCase(data, caseId);
+      if (!c) return send(res, 404, { error: 'case not found' });
+      // The posted text is labelled a draft and states plainly that
+      // sharing is not approval. ASCII only: switch-core 500s on em
+      // dashes, so dashes and smart quotes are replaced (the stored
+      // draft keeps its original text; the replacement is recorded).
+      // ASCII only: switch-core 500s on any non-ASCII character
+      // (em dash, smart quotes, the middle dot in "Mara · Owner").
+      // Replace the known punctuation, then drop anything else
+      // outside printable ASCII so the posted text is always safe.
+      const clean = (s) => String(s || '').replace(/[\u2014\u2013]/g, '-').replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/[^\x20-\x7E\n]/g, '');
+      const header = `[CONVERGE draft - facilitator, ${draft.role}]`;
+      const footer = clean(`Draft only, shared by ${actor.name} for review. Sharing is not approval: the owner must separately approve any agreement.`);
+      const draftText = clean(draft.draft);
+      const sanitized = draftText !== String(draft.draft || '');
+      const budget = 4000 - header.length - footer.length - 4; // blank lines
+      const shown = draftText.length > budget ? `${draftText.slice(0, Math.max(0, budget - 3))}...` : draftText;
+      const shareText = `${header}\n\n${shown}\n\n${footer}`;
+      let shareResult;
+      try {
+        if (realSwitch) {
+          const roomId = await ensureRealRoom(c);
+          const result = await withRoomConnection(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, roomId, async (connectionId) => {
+            return callOp(SWITCH_BASE_URL, SWITCH_API_KEY, SWITCH_AGENT_ID, 'post_message', { body: shareText }, connectionId);
+          });
+          shareResult = { eventId: result.result?.event_id || null, roomId, room: c.switchRoom, simulated: false, sanitized };
+        } else {
+          const msg = stubCallOp(stub, 'post_message', { room: c.switchRoom, roomId: c.switchRoomId, text: shareText, author: actor.name });
+          shareResult = { eventId: msg?.id || null, roomId: c.switchRoomId || null, room: c.switchRoom, simulated: true, sanitized };
+        }
+      } catch (e) {
+        // The post failed: record the failure on the draft, keep the
+        // status unchanged, and report the failure honestly — never
+        // claim a share that did not happen.
+        const failed = updateDraft(draftId, (d) => { d.shareError = { message: String(e.message || e).slice(0, 500), at: now }; });
+        return send(res, 502, { error: `Sharing failed: ${String(e.message || e).slice(0, 200)}`, draft: failed });
+      }
+      const updated = updateDraft(draftId, (d) => {
+        d.status = 'SHARED';
+        d.sharedBy = actor.name;
+        d.sharedAt = now;
+        d.shareResult = shareResult;
+        d.shareError = null;
+      });
+      // The shared message is also recorded on the case (same as a
+      // room post through /api/switch/post) so the drawer shows it.
+      try {
+        c.messages = c.messages || [];
+        c.messages.push({ id: shareResult.eventId || `draft-${draftId}`, author: actor.name, kind: 'human', text: shareText, at: now, room: c.switchRoom, roomId: shareResult.roomId, eventId: shareResult.eventId, real: !shareResult.simulated, draftId });
+        audit(c, actor, 'draft-shared', { draftId, caseId, room: c.switchRoom, eventId: shareResult.eventId });
+        save(data);
+      } catch (e) { console.error('CONVERGE draft share audit failed:', e); }
+      return send(res, 200, updated);
     }
     // --- API: Switch — real server when configured, stub otherwise ---
     if (url.pathname === '/api/switch/health' && req.method === 'GET') {
@@ -702,7 +872,11 @@ const server = createServer(async (req, res) => {
         });
         return send(res, 200, { messages, live: true, roomId });
       } catch (e) {
-        return send(res, 200, { messages: stored, live: false, error: `Live room timeline unavailable: ${String(e.message || e).slice(0, 200)}` });
+        // §31.3: the error text used to be interpolated into the
+        // response, leaking raw Switch error detail. A generic
+        // message only; the detail is logged server-side by the
+        // outer catch path (console.error there).
+        return send(res, 200, { messages: stored, live: false, error: 'Live room timeline unavailable.' });
       }
     }
     if (url.pathname === '/api/switch/post' && req.method === 'POST') {
@@ -748,9 +922,10 @@ const server = createServer(async (req, res) => {
     // A status-carrying error (readBody 400/413) is answered as-is; any
     // other failure is logged server-side and answered with a generic
     // 500 so internals (Switch error text, stack traces) never leak.
+    // sanitizePublicError (§31.3) centralises that rule.
     if (e && typeof e.statusCode === 'number') return send(res, e.statusCode, { error: e.message });
     console.error('CONVERGE server error:', e);
-    return send(res, 500, { error: 'internal error' });
+    return send(res, 500, { error: sanitizePublicError(e) });
   }
 });
 
@@ -758,4 +933,4 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
   // SECURITY: loopback only — the app, like the Switch stack, is local-only.
   server.listen(PORT, '127.0.0.1', () => console.log(`CONVERGE on http://localhost:${PORT} — Switch mode: ${SWITCH_MODE}`));
 }
-export { server };
+export { server, nextHaggleId };
