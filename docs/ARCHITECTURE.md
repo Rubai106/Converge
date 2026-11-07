@@ -1,10 +1,12 @@
 # CONVERGE — Architecture
 
-**Status:** current as of the master-prompt window, 2026-11-07. Suite
-**294/294**, `npm run check` clean. This document describes the system as
-it now stands — after the Phase Zero audit (`docs/COMPREHENSIVE-AUDIT.md`)
-and the P0/P1 implementation (commits `eb479aa`, `5bcb9c2`, `390bae4`,
-`3e18a86`). It does not describe aspirations; where a component is not
+**Status:** current as of the conversational-reply window, 2026-11-07 ~12:00 Dhaka. Suite
+**375 pass, 0 fail, 1 skipped (376 total)**, `npm run check` clean. This document describes the system as
+it now stands — after the Phase Zero audit (`docs/COMPREHENSIVE-AUDIT.md`),
+the P0/P1 implementation (commits `eb479aa`, `5bcb9c2`, `390bae4`,
+`3e18a86`), the §30 draft handoff (`3894630`), the §31 security work
+(`57ac52f`), and the conversational-reply mechanism (`server/replies.js`,
+2026-11-07). It does not describe aspirations; where a component is not
 yet running, it says so.
 
 ## 1. The system in one paragraph
@@ -18,11 +20,14 @@ it. A separate long-lived agent runtime (`server/agent-runtime.js`)
 holds one persistent connection to Switch (WebSocket primary, SSE
 fallback), routes addressed human messages through a read/draft-only
 tool registry, and asks a provider-independent LLM abstraction
-(`server/llm.js`) to draft responses — never to approve, post, or
-execute anything. Switch (switch-core 0.31.0 + Mattermost 11.9.0) is
-the collaboration surface: one Mattermost room per case, with the
-bridge delivering human messages into Switch's room timeline, which the
-app reads with `read_context`.
+(`server/llm.js`) to draft responses. After a draft is built, the
+runtime may also publish a VALIDATED informational reply into the
+originating room under its own agent identity (`server/replies.js`) —
+the conversational-teammate path (see §7). It never approves, and it
+never holds a human session token. Switch (switch-core 0.31.0 +
+Mattermost 11.9.0) is the collaboration surface: one Mattermost room
+per case, with the bridge delivering human messages into Switch's room
+timeline, which the app reads with `read_context`.
 
 ## 2. Component map
 
@@ -49,8 +54,8 @@ app reads with `read_context`.
    │  - /api/switch/*    │               │  - routes addressed     │
    │    read + post      │               │    human messages →     │
    └──────┬──────────────┘               │    tools → LLM draft    │
-          │                              │  - drafts only, never   │
-          │  load/save                   │    posts/approves       │
+          │                              │  - validated replies    │
+          │  load/save                   │    only, never approves │
    ┌──────┴──────────────┐               └──────────────┬──────────┘
    │  JSON store         │                              │ read-only
    │  data/converge.json │                              │ file read
@@ -364,28 +369,94 @@ one persistent Switch connection, subscribes to the three rooms
    ignored.
 2. The room is resolved to a case (`switchRoomId`, falling back to the
    known room→case map). No case → no action.
-3. Context is gathered **through the tools only**.
-4. A role lens is selected internally (Facilitator, Financial Analyst,
+3. A source message that already has a reply (see §11.1) is skipped
+   entirely — idempotency, so a re-read or reconnect never double-posts.
+4. Context is gathered **through the tools only**.
+5. A role lens is selected internally (Facilitator, Financial Analyst,
    Researcher, Challenger/Auditor, Workflow Specialist — sections of
    the facilitator's system prompt, selected per message, **not**
    separate Switch agents) and the model drafts a JSON response.
-5. The draft is surfaced through `onDraft` (default: logged). **It is
-   never posted to the room by the runtime.** A human decides what to
-   do with it.
+6. The draft is surfaced through `onDraft` (default: written to the
+   draft inbox, `server/drafts.js`, and logged) for human review.
+7. The runtime then attempts a conversational reply (§11.1): the same
+   model text, validated and posted to the originating room under the
+   facilitator's own agent identity. A rejected or failed reply never
+   affects the draft — the human can still review and share it.
 
 The runtime reads the case store read-only (direct file read — no
 migration, no save) and only ever calls Switch read ops plus
 `read_context` for timeline re-reads. It never calls `/api/session`,
 never holds a human session token, and never calls a mutating app
-endpoint. SIGINT/SIGTERM stop it cleanly.
+endpoint. The only files it writes are the draft inbox and the reply
+record (both append-only, gitignored, neither the case store).
+SIGINT/SIGTERM stop it cleanly.
 
-**Deployment status (honest):** the runtime code is complete and
-tested (58 tests), but the long-lived runtime process is **not
-currently running** in production — starting it is a remaining step
-(see `docs/JUDGE-SCORECARD.md` and `docs/IMPLEMENTATION-LOG.md`). The
-app server :3100 runs the new code; the runtime is a separate process
-that must be started with the Switch env and, for drafting, the LLM
-env.
+**Deployment status (honest):** the runtime process **is running in
+production** (observe-only: `LIVE MODEL NOT CONFIGURED`, `mock: false`;
+restarted 2026-11-07 ~11:00 Dhaka after the tenth VM replacement).
+It observes the three rooms and logs, but produces no drafts and
+posts no replies until a provider key is configured. The reply
+mechanism was verified live with the labelled mock provider
+(2026-11-07 ~11:40 Dhaka — see §11.1). The app server :3100 runs the
+new code; the runtime is a separate process.
+
+### 11.1 Conversational replies — the facilitator as a teammate (`server/replies.js`)
+
+After a draft is built, the runtime may publish a validated
+informational model response into the originating Mattermost room
+through Switch, under its own agent identity. This is the
+agent-as-teammate path the Flip the Switch demo requires: a human
+sharing a draft from the inbox is not the primary demonstration; the
+agent replying in the room is.
+
+It is a narrowly scoped system capability, NOT an unrestricted LLM
+tool. The model never posts — there is no post/send tool in the
+registry (`tools.js` forbids tool names matching
+`/post.?message|send.?message/`), and `server/replies.js` is never
+reachable from a tool call. The model drafts prose; the runtime
+validates it and posts it. The controls, in order:
+
+- **Validation (`validateReplyText`)**: rejects approval / commitment /
+  decision language (first-person: "I approve", "we agreed", "I will
+  pay"), credential requests (PIN/OTP/password), claims to be human,
+  and instructions to contact a supplier. It deliberately does NOT
+  reject factual descriptions of past human actions ("P2 was approved
+  by the Owner"). It also rejects any money or percentage figure that
+  does not match the deterministic engine's output or the case's own
+  numbers (`collectKnownFigures` + `validateFigures`) — a % is valid
+  if it matches a known % or is the difference of two known %. A
+  rejected reply is logged and never posted.
+- **ASCII only**: `sanitizeReplyText` normalises dashes/quotes and
+  strips the rest before validation (switch-core 500s on non-ASCII).
+- **Reply text (`buildReplyText`)**: a label line ("[CONVERGE
+  facilitator - informational analysis, not a decision]"), the
+  validated model text, a compact engine-figures line for HAGGLE
+  (labelled deterministic, not model-computed), and a footer ("Final
+  decisions stay with a human"). Maximum 1500 chars.
+- **Posting (`postReplyToRoom`)**: the runtime's own agent credentials
+  via the verified `withRoomConnection` path (open SSE stream →
+  `connect_to_room` → `post_message`). Never a human session token.
+  Posting a room message changes no CONVERGE state.
+- **Idempotency (`data/replies.json`, gitignored)**: every reply is
+  recorded PENDING before posting, then POSTED with the Switch event
+  id. A source message with a PENDING or POSTED reply is never
+  handled again. A failed post drops the PENDING record so a later
+  re-route may retry; a post that succeeded but crashed before the
+  record was completed is reconciled by `reconcilePendingReplies()`
+  against the room timeline (the posted text carries the ref id).
+- **Kill switch**: `CONVERGE_REPLY_ENABLED=false` disables replies
+  entirely (drafts still go to the inbox). A message with no source
+  message id is never replied to (idempotency unavailable).
+
+**Verified live (mock provider, labelled — 2026-11-07 ~11:40 Dhaka):**
+a real human message in `#haggle-dairyco` produced a mock reply in
+the real room (event `sw_e4e5c560…`, ref `89be10b7`, 1 second after
+the question; live drawer 23 messages). The reply is clearly labelled
+MOCK and carries the correct engine figures (28.63% → 31.62%,
++$76.80/mo, +$921.60/yr, max sustainable $0.1967). A re-route of the
+same source message was skipped (0 posts). This proves the mechanism;
+it does NOT prove a live model response — no provider key is
+configured yet (Cloudflare Workers AI token outstanding from Rubai).
 
 ## 12. The three workflows, one engine
 

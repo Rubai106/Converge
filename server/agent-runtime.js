@@ -12,16 +12,26 @@
 //    NEVER calls a mutating app endpoint. The agent can never approve:
 //    there is no approval tool in the registry and this file contains no
 //    transition/approve/adopt/publish call of any kind.
-//  - It NEVER posts messages to a room on its own. Drafts are surfaced
-//    through onDraft (default: written to the local draft inbox,
-//    server/drafts.js, and logged) for a human to review and share.
-//    An agent that posts unprompted is not this agent.
+//  - It posts to a room ONLY through the validated conversational-reply
+//    path (server/replies.js): an INFORMATIONAL model response, after
+//    the runtime validates it (no approval/commitment/decision language,
+//    no credential request, no supplier contact, every money/percentage
+//    figure matching the deterministic engine's output, ASCII-only).
+//    A rejected reply is logged and never posted; the draft still
+//    reaches the inbox. The model itself never posts — there is no
+//    post/send tool in the registry, and the runtime is the gate. A
+//    reply changes no CONVERGE state: cases, proposals, approvals and
+//    claim statuses are only mutated through the session-authenticated
+//    app endpoints, which this runtime cannot call.
 //  - Specialist roles (Facilitator, Financial Analyst, Researcher,
 //    Challenger/Auditor, Workflow Specialist) are INTERNAL lenses inside
 //    the facilitator's system prompt — not separate Switch agents. This
 //    file registers no agents and creates no identities.
 //  - It reads the case store READ-ONLY (direct file read, never the
-//    store's load()/save()) and never writes production data.
+//    store's load()/save()) and never writes production data. The only
+//    files it writes are the draft inbox (server/drafts.js) and the
+//    reply record (server/replies.js) — both append-only, both
+//    gitignored, neither of them the case store.
 //
 // Connection ownership (integration point with server/switch-client.js):
 //  - The runtime owns the ONE long-lived event connection: scope=all,
@@ -55,6 +65,11 @@ import { connectWithFallback, EventDeduper, Cursor, computeBackoffMs } from './s
 import { createProvider, LlmNotConfiguredError } from './llm.js';
 import { createToolRegistry } from './tools.js';
 import { appendDraft, findOpenDraft, resolveDraftsFile } from './drafts.js';
+import {
+  resolveRepliesFile, hasReplied, beginReply, completeReply, removeReply,
+  buildReplyText, validateReplyText, collectKnownFigures, postReplyToRoom,
+  extractEventId,
+} from './replies.js';
 import { withRoomConnection, callOp, switchTimelineToMessages } from './switch-client.js';
 
 export const DEFAULT_ROOMS = [
@@ -179,6 +194,19 @@ export function createAgentRuntime(opts = {}) {
   };
   const onDraft = opts.onDraft || defaultOnDraft;
   const onEventLog = opts.onEventLog || (() => {});
+  // The reply record file (server/replies.js). opts.repliesFile exists
+  // so tests can point at a scratch file.
+  const repliesFile = opts.repliesFile || resolveRepliesFile();
+  // Conversational replies: enabled by default when a provider is
+  // configured; CONVERGE_REPLY_ENABLED=false is the kill switch.
+  // Injectable (opts.replyEnabled) so tests can force either state.
+  const replyEnabled = opts.replyEnabled !== undefined
+    ? Boolean(opts.replyEnabled)
+    : String(process.env.CONVERGE_REPLY_ENABLED || 'true').toLowerCase() !== 'false';
+  // The post function: opts.postReply exists so tests can stub the
+  // network; the default posts through the runtime's own agent
+  // credentials (never a human session token).
+  const postReply = opts.postReply || (({ roomId, text }) => postReplyToRoom({ baseUrl, apiKey, agentId, roomId, text }));
 
   const cursor = new Cursor(0);
   const deduper = new EventDeduper();
@@ -190,6 +218,9 @@ export function createAgentRuntime(opts = {}) {
     rooms: [],
     draftsProduced: 0,
     draftsSkippedNoModel: 0,
+    repliesPosted: 0,
+    repliesRejected: 0,
+    repliesSkipped: 0,
     eventsSeen: 0,
     duplicatesDropped: 0,
     gapsSeen: 0,
@@ -257,6 +288,13 @@ export function createAgentRuntime(opts = {}) {
     const c = getCase(caseId);
     if (!c) {
       log('warn', 'room resolves to an unknown case — no action', { roomId, caseId });
+      return null;
+    }
+    // Idempotency: a source message that already has a reply is never
+    // handled twice — not on a re-read, not after a reconnect, not
+    // after a restart. The reply record is the source of truth.
+    if (messageId && hasReplied(messageId, repliesFile)) {
+      log('info', 'message already replied to — skipping (idempotency)', { caseId, messageId });
       return null;
     }
     if (!provider.configured) {
@@ -344,7 +382,81 @@ export function createAgentRuntime(opts = {}) {
     state.draftsProduced += 1;
     if (draft.mock) log('warn', 'MOCK draft produced — test mock, NOT a live model response', { caseId, role: draft.role });
     onDraft(draft);
+    // Conversational reply: the same validated model text, posted to
+    // the originating room under the facilitator's own agent identity.
+    // This is the teammate path — it is attempted only when replies are
+    // enabled, and only after the draft is safely in the inbox. A
+    // rejected or failed reply never affects the draft: the human can
+    // still review and share it from the Drafts tab.
+    await attemptReply({ draft, engineCtx, caseObj: c, messageId });
     return draft;
+  }
+
+  // Post a validated informational reply for a draft. Returns the
+  // reply record when posted, or null when skipped / rejected / failed.
+  // The model never posts: this function validates the draft text
+  // (replies.js) and posts through the runtime's own agent credentials.
+  async function attemptReply({ draft, engineCtx, caseObj, messageId }) {
+    if (!replyEnabled) {
+      state.repliesSkipped += 1;
+      log('info', 'conversational replies disabled — draft only', { caseId: draft.caseId });
+      return null;
+    }
+    if (!messageId) {
+      // No source message id: idempotency is unavailable, so do not
+      // post (a re-read could double-post). The draft is still in the
+      // inbox for human review.
+      state.repliesSkipped += 1;
+      log('warn', 'no source message id — reply skipped (idempotency unavailable)', { caseId: draft.caseId });
+      return null;
+    }
+    const refId = draft.id.slice(0, 8);
+    const replyText = buildReplyText({ draftText: draft.draft, findings: draft.findings, refId });
+    const known = collectKnownFigures(caseObj, engineCtx);
+    const check = validateReplyText(replyText, known);
+    if (!check.ok) {
+      state.repliesRejected += 1;
+      log('warn', 'reply rejected by validation — NOT posted (draft still in inbox)', { caseId: draft.caseId, errors: check.errors });
+      return null;
+    }
+    const now = new Date().toISOString();
+    const record = {
+      id: draft.id,
+      refId,
+      caseId: draft.caseId,
+      roomId: draft.roomId,
+      sourceMessageId: messageId,
+      from: draft.from,
+      request: draft.request,
+      text: replyText,
+      role: draft.role,
+      provider: draft.provider,
+      model: draft.model,
+      mock: draft.mock,
+      status: 'PENDING',
+      createdAt: now,
+      eventId: null,
+      postedAt: null,
+    };
+    // PENDING first (the crash window), then post, then POSTED with
+    // the Switch event id. A failed post drops the PENDING record so
+    // a later re-route may retry; a post that succeeded but crashed
+    // before completeReply() is reconciled by reconcilePendingReplies().
+    beginReply(record, repliesFile);
+    let postResult;
+    try {
+      postResult = await postReply({ roomId: draft.roomId, text: replyText });
+    } catch (err) {
+      removeReply(record.id, repliesFile);
+      state.repliesRejected += 1;
+      log('error', 'reply post failed — PENDING record dropped, a re-route may retry', { caseId: draft.caseId, error: err.message });
+      return null;
+    }
+    const eventId = extractEventId(postResult);
+    completeReply(record.id, eventId, repliesFile);
+    state.repliesPosted += 1;
+    log('info', 'conversational reply posted to the room', { caseId: draft.caseId, roomId: draft.roomId, refId, eventId, mock: draft.mock });
+    return record;
   }
 
   // Catch-up: re-read every subscribed room's timeline and log what is
@@ -469,12 +581,16 @@ export function createAgentRuntime(opts = {}) {
       baseUrl,
       model: provider.configured ? `${provider.provider}/${provider.model}` : 'LIVE MODEL NOT CONFIGURED',
       mock: Boolean(provider.isMock),
+      repliesEnabled: replyEnabled,
     });
     if (!provider.configured) {
       log('info', 'LIVE MODEL NOT CONFIGURED — the runtime will observe rooms and log, but produce no drafts. Set CONVERGE_LLM_PROVIDER and CONVERGE_LLM_API_KEY to enable drafting.');
     }
     if (provider.isMock) {
       log('warn', 'MOCK provider active — drafts are test output, NEVER live AI. Do not present them as model responses.');
+    }
+    if (!replyEnabled) {
+      log('info', 'Conversational replies DISABLED (CONVERGE_REPLY_ENABLED=false) — drafts go to the inbox only, nothing is posted to a room.');
     }
     if (!apiKey) {
       state.running = false;
@@ -533,6 +649,9 @@ export function createAgentRuntime(opts = {}) {
       gapsSeen: state.gapsSeen,
       draftsProduced: state.draftsProduced,
       draftsSkippedNoModel: state.draftsSkippedNoModel,
+      repliesPosted: state.repliesPosted,
+      repliesRejected: state.repliesRejected,
+      repliesSkipped: state.repliesSkipped,
       stopReason: state.stopReason,
     });
     return state;

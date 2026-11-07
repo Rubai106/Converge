@@ -633,3 +633,152 @@ M1/M2/M3/M5/M8/M10/M11/M13/M17 (P0 + dark redesign).
   runtime process, PID 15615; WebSocket protocol 9, heartbeat 2s).
 - Production data hash `b379c656…` (authorised share, see above);
   audit hash chain valid for all three cases.
+
+## ~11:22–12:00 Dhaka — conversational replies (agent-as-teammate), demo plans, video rework
+
+Rubai checked the official Flip the Switch brief: the demo must
+explicitly show the AI agent working in a REAL team chat with human
+teammates. A dashboard walkthrough or a human sharing an
+AI-generated draft is not sufficient as the primary demonstration.
+He commissioned a controlled, secure conversational reply mechanism,
+genuine teammate-collaboration demo plans for Track 01 (HAGGLE) and
+Track 02 (COURT), and a chat-first rework of the video plan, with a
+release gate. Work done in this window:
+
+### Conversational replies — done (`server/replies.js`, new; `server/agent-runtime.js`)
+
+- **The mechanism.** After the model produces a draft for an
+  addressed human message, the runtime may publish a VALIDATED
+  informational model response into the originating Mattermost room
+  through Switch, under its own agent identity. The model never
+  posts — there is no post/send tool in the registry (`tools.js`
+  forbids tool names matching `/post.?message|send.?message/`), and
+  `server/replies.js` is never reachable from a tool call. The
+  runtime validates the draft text and posts it with its own agent
+  credentials (`withRoomConnection` + `post_message`); it never holds
+  a human session token and never calls a mutating app endpoint, so
+  it cannot approve, adopt, publish, or transition a case.
+- **Validation (`validateReplyText`).** Rejects approval/commitment/
+  decision language (first-person: "I approve", "we agreed", "I will
+  pay"), credential requests (PIN/OTP/password), claims to be human,
+  and instructions to contact a supplier. Deliberately does NOT
+  reject factual descriptions of past human actions ("P2 was
+  approved by the Owner"). Every money/percentage figure must match
+  the deterministic engine's output or the case's own numbers
+  (`collectKnownFigures` + `validateFigures`); a % is valid if it
+  matches a known % or is the difference of two known %. ASCII-only
+  (sanitised before validation — switch-core 500s on non-ASCII).
+  Reply text: label line, validated model text, a compact
+  engine-figures line for HAGGLE (labelled deterministic), a footer
+  ("Final decisions stay with a human"). Max 1500 chars. A rejected
+  reply is logged and never posted; the draft still reaches the
+  inbox.
+- **Idempotency (`data/replies.json`, gitignored).** Every reply is
+  recorded PENDING before posting, then POSTED with the Switch event
+  id. A source message with a PENDING or POSTED reply is never
+  handled again. A failed post drops the PENDING record so a later
+  re-route may retry; a post that succeeded but crashed before the
+  record was completed is reconciled by `reconcilePendingReplies()`
+  against the room timeline (the posted text carries the ref id).
+  Kill switch: `CONVERGE_REPLY_ENABLED=false`. A message with no
+  source message id is never replied to.
+- **Tests — 25 new (`tests/replies.test.js`).** Sanitisation, figure
+  extraction + known figures, figure validation (incl. percentage-
+  point differences), forbidden content, factual past-human-approval
+  descriptions pass, reply text building (ASCII), reply store +
+  idempotency, PENDING/POSTED reconciliation, runtime integration
+  (post on valid, reject on forbidden/invented figures,
+  `replyEnabled=false`, no-id skip, failed-post retry, COURT posts
+  + COURT money rejection). Existing routing tests
+  (`tests/agent-runtime.test.js`, `tests/drafts.test.js`) now pass
+  `replyEnabled: false` so they assert on drafts, not posts.
+- **Verified live (mock provider, labelled) — 2026-11-07 ~11:40
+  Dhaka.** A real human message in `#haggle-dairyco`
+  ("@converge-facilitator What is the financial impact of the
+  DairyCo price rise, and which counter should we offer? Do not
+  approve anything.") produced a mock reply in the real room
+  1 second later (event `sw_e4e5c560572741b89cc8c157ad307b6d`, ref
+  `89be10b7`, live drawer 23 messages). The reply is clearly
+  labelled MOCK and carries the correct engine figures (28.63% →
+  31.62%, +$76.80/mo, +$921.60/yr, max sustainable $0.1967). A
+  re-route of the same source message was skipped (0 posts) —
+  idempotency proven live. (One false alarm during the check: the
+  first idempotency probe used a truncated source id, so it posted a
+  second record to the stub only — not to the real room; the bogus
+  record was removed from `data/replies.json` and the check re-run
+  with the full id, which passed.) The runtime was then restarted
+  observe-only (PID 18570, `LIVE MODEL NOT CONFIGURED`, `mock:
+  false`, replies enabled). This proves the mechanism; it does NOT
+  prove a live model response — no provider key is configured yet.
+- **Data note.** The production data hash moved `b379c656…` →
+  `71a83bcfa7d680f2` in this window. The change is ONLY the §31.2
+  stable-claim-id migration on COR-003 (legacy positional keys C1/C2
+  → content-derived C-3e8e58e6/C-97c7980b; values 'Corrected' /
+  'Disputed' preserved). HAG-014 and CRT-007 are byte-identical;
+  HAG-014 approval P2 "$0.19/fl oz for 6 weeks" intact; audit chains
+  valid for all three cases (10 / 3 / 5 events).
+
+### Demo plans + video rework — done (delegated, reviewed)
+
+- **Track 01** (`submission/demo-track01-haggle.md`): HAGGLE demo
+  plan — room setup, the exact 8-step rehearsal sequence (human
+  spots the problem → another human tags the facilitator → agent
+  investigates + replies → teammate challenges → agent responds with
+  more investigation + engine numbers → owner reviews the proposal
+  → human approval, separate and secure), what each step proves,
+  and what is blocked on the Cloudflare token vs already proven.
+  States plainly that Rubai must invite at least one real teammate
+  (only the `user` account exists on this Mattermost); no fake
+  accounts, no fabricated screenshots; fallbacks if only one
+  teammate or none can be invited.
+- **Track 02** (`submission/demo-track02-court.md`): same structure
+  for COURT (blind recipe disagreement) — the tally means (S1 4.67
+  / S2 4.33 / S3 3.33), the disagreement analysis, a teammate
+  challenge, the human adoption of the canonical version.
+- **Video script** (`submission/demo-script.md`): reworked chat-first
+  — Mattermost dominates (Scene 3 is the room full-screen for the
+  whole scene), the dashboard appears only for calculations,
+  evidence, proposals and approvals. The original script is
+  preserved as an appendix. Release gate added (do not record until:
+  real model provider configured, genuine agent response verified,
+  agent responses in the actual room, two-way conversation works,
+  HAGGLE + COURT verified, human approval protected, tests pass,
+  at least one real teammate invited). Never present the
+  mock-labelled reply as live AI.
+
+### Docs updated
+
+- `docs/ARCHITECTURE.md` (§1, §2 component map, §11 + new §11.1):
+  the reply mechanism, its controls, and its live verification.
+- `README.md` (§6 protocol + Switch status, §9 test count,
+  §10 demo video): replies, tenth recovery, 375/376, chat-first
+  script.
+- `docs/TESTING-REPORT.md`: suite now 376 (375 pass, 1 skipped),
+  38 files; §30/§31/M7/reply rows added; §4 "NOT tested" items
+  corrected (live Switch test and live XSS probe and axe-core are
+  now in the suite).
+- `docs/JUDGE-SCORECARD.md`: Use of Switch 8 (reply evidence added,
+  still mock — the live-model bar is unmet); Technical 10 (376
+  tests + reply mechanism); Presentation 7 (video now has SIX stale
+  elements — added "predates the conversational reply"); §3
+  60-second proof rewritten to lead with the conversational reply;
+  §4 feasibility re-checked (only blocker: the provider key);
+  §5 moves table updated (live-model reply → Use of Switch 9;
+  chat-first re-record → Presentation 9). Headline unchanged:
+  **~40/50**.
+
+### Verification (this window)
+
+- `npm run check` clean. Full suite **376 tests (375 pass, 1 skipped
+  — the opt-in live Switch test), 0 fail**. With SWITCH_BASE_URL set
+  the live test runs 2/2.
+- Live end-to-end check before the push (2026-11-07 ~11:22 Dhaka):
+  suite 351/350/1 at that time; Playwright against the production
+  app :3100 — dashboard shows all 3 cases, HAG-014 COMPLETED, Drafts
+  tab shows the SHARED mock draft with the MOCK label, Negotiation
+  shows the $0.19 agreed terms, Audit shows the approval +
+  draft-shared event, 0 console errors.
+- Reply mechanism verified live with the mock provider (above).
+- Production app :3100 still running the new code (HTTP 200).
+  Runtime observe-only (PID 18570). Data hash `71a83bcfa7d680f2`
+  (explained above); audit chains valid for all three cases.

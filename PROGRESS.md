@@ -363,3 +363,31 @@ Rubai pasted the second-phase prompt (§27–§36). Worked in parallel streams; 
 
 ### Final demo video — DEFERRED by Rubai (only after the above, per his instruction)
 - Spec preserved in the second-phase prompt and `submission/demo-script.md`. Scene 3 as written requires a real model-generated draft — subject to the honesty constraint (needs the Cloudflare token). The original video is untouched.
+
+### Seventeenth GitHub sync — DONE (2026-11-07 ~11:22 Dhaka)
+- Rubai: "push it to github." Remote head `b9728da33921985b1932ee29eabe3a03dbf4818d`, **39 text files** (the second-phase work: dd0279f, 3894630, 57ac52f, fdcb435, e646328). Provenance verified before pushing (remote head still 6fab1dd; 12 new paths confirmed absent; 27 modified, no divergence). Read-back verified (server/drafts.js blob 333f7a7b… identical locally and remotely). Sync record updated (17 entries). **End-to-end check before pushing:** suite 351 (350 pass, 1 skipped); live Playwright against :3100 — dashboard all 3 cases, HAG-014 COMPLETED, Drafts tab shows the SHARED mock draft with the MOCK label, Negotiation shows $0.19 agreed terms, Audit shows approval + draft-shared, 0 console errors.
+- **PC re-test after this sync:** `git pull` + `npm test` (expect 351, 350 pass, 1 skipped) + try the dark UI + Drafts tab.
+
+### Conversational replies (agent-as-teammate) — DONE (2026-11-07 ~11:30–12:00 Dhaka)
+- Rubai checked the official brief: the demo must show the agent working in a REAL team chat with human teammates. He commissioned the reply mechanism, Track 01/02 demo plans, and a chat-first video rework, with a release gate.
+- **Mechanism (`server/replies.js`, new):** after a draft is built, the runtime may publish a VALIDATED informational model response into the originating room under its own agent identity. The model never posts (no post/send tool in the registry). Validation rejects approval/commitment/decision language, credential requests, supplier contact, and any money/% figure not matching the deterministic engine; replies are labelled informational, carry the engine figures, and are recorded idempotently (one reply per source message, `data/replies.json`). Kill switch `CONVERGE_REPLY_ENABLED=false`. The runtime never holds a human session token.
+- **Tests:** 25 new (`tests/replies.test.js`). Full suite now **376 (375 pass, 1 skipped)**.
+- **Verified live (mock, labelled) 2026-11-07 ~11:40 Dhaka:** a real human question in #haggle-dairyco produced a mock reply in the real room 1 second later (event `sw_e4e5c560…`, ref `89be10b7`, live drawer 23 messages); a re-route of the same message was skipped (0 posts). This proves the mechanism, NOT a live model response.
+- **Demo plans:** `submission/demo-track01-haggle.md` (Track 01, HAGGLE) and `submission/demo-track02-court.md` (Track 02, COURT) — rehearsal sequences, what each step proves, and what is blocked on the token vs already proven. Rubai must invite at least one real teammate (only the `user` account exists on this Mattermost); no fake accounts, no fabricated screenshots.
+- **Video script:** `submission/demo-script.md` reworked chat-first (Mattermost dominates; dashboard only for calculations/evidence/proposals/approvals). Release gate added. Original script preserved as an appendix. Video still deferred — needs the live model.
+- **Docs:** ARCHITECTURE (§11.1), README, TESTING-REPORT (376), JUDGE-SCORECARD (Use of Switch 8, Technical 10, Presentation 7 — video now has SIX stale elements; §3 60-second proof rewritten to lead with the reply). Headline unchanged: **~40/50**.
+- **Data hash moved `b379c656…` → `71a83bcfa7d680f2`** — ONLY the §31.2 stable-claim-id migration on COR-003 (C1/C2 → C-3e8e58e6/C-97c7980b; values preserved). HAG-014/CRT-007 byte-identical; HAG-014 approval P2 intact; audit chains valid for all three cases.
+
+### Current production state (2026-11-07 ~12:00 Dhaka)
+- App :3100 running the new code (HTTP 200). Runtime observe-only (PID 18570; `LIVE MODEL NOT CONFIGURED`, `mock: false`, replies enabled). Production data hash `71a83bcfa7d680f2`; audit chains valid for all three cases. HAG-014 COMPLETED, approval P2 "$0.19/fl oz for 6 weeks" intact. Live drawer 23 messages (21 + the human question + the mock reply from the live reply verification).
+- **Eighteenth GitHub sync — to be prepared** (this window's work: replies.js, agent-runtime.js reply integration, replies tests, demo plans, video rework, docs). Needs Rubai's approval on the write card.
+
+### Rubai's own actions (still outstanding — updated)
+1. **Cloudflare Workers AI token (via the vault link already sent) + Account ID (in chat is fine)** — unblocks the live model (§29), the live-model reply in the room, the §29.4 quality evaluation, and Scenes 3/5 of the final video. **This is now the single blocker for the demo video.**
+2. **Invite at least one real teammate to the Mattermost rooms** (for the Track 01/02 demos — two humans + the agent in the room). No fake accounts.
+3. **Recruit/run the real-user evaluation** (§32, protocol ready).
+4. **Capture the genuine Wispr Insights scorecard** (never fabricate; voice log has zero entries).
+5. **The hackathon-page submission itself** — deadline Nov 8, 2026, 00:29 Dhaka (~12 hours).
+6. **2-minute phone check** of the demo.
+7. **A copy of the deployment backup outside this machine.**
+8. **PC re-test after the next sync:** `git pull` + `npm test` (expect 376, 375 pass, 1 skipped) + try the dark UI + Drafts tab.

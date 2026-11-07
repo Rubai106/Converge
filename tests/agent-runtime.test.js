@@ -33,6 +33,10 @@ function makeRuntime(overrides = {}) {
     readTimeline: async (caseId) => { timelineReads.push(caseId); return []; },
     onDraft: (d) => drafts.push(d),
     logger: (level, msg, detail) => logs.push({ level, msg, detail }),
+    // Replies are disabled in these routing tests (they assert on
+    // drafts, not on posts); the reply path has its own suite in
+    // tests/replies.test.js with a stubbed postReply.
+    replyEnabled: false,
     ...overrides,
   });
   return { runtime, drafts, logs, timelineReads };

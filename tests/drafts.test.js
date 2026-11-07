@@ -169,6 +169,8 @@ test('drafts: the runtime draft record carries id, request, provider, tools and 
       getCases: () => seedData().cases,
       readTimeline: async () => [],
       draftsFile,
+      // Replies disabled here: these tests assert on drafts, not posts.
+      replyEnabled: false,
     });
     const d = await runtime.routeHumanMessage({ roomId: HAG_ROOM, messageId: 'm1', senderName: 'Mara', text: 'What should we do about the cream price?' });
     assert.ok(d, 'a draft is produced');
@@ -205,6 +207,8 @@ test('drafts: a new draft supersedes the open draft for the case (old record kep
       getCases: () => seedData().cases,
       readTimeline: async () => [],
       draftsFile,
+      // Replies disabled here: these tests assert on drafts, not posts.
+      replyEnabled: false,
     });
     const d = await runtime.routeHumanMessage({ roomId: HAG_ROOM, messageId: 'm2', senderName: 'Mara', text: 'And the volume option?' });
     assert.equal(d.supersedes, 'old-draft');
@@ -228,6 +232,8 @@ test('drafts: COURT drafts record evidence ids, not engine maths', async () => {
       getCases: () => seedData().cases,
       readTimeline: async () => [],
       draftsFile,
+      // Replies disabled here: these tests assert on drafts, not posts.
+      replyEnabled: false,
     });
     const d = await runtime.routeHumanMessage({ roomId: COURT_ROOM, messageId: 'm1', senderName: 'Mara', text: 'Which version won the blind test?' });
     assert.deepEqual(d.toolsUsed, ['read_case', 'read_room_timeline']);
