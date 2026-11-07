@@ -1,91 +1,331 @@
-# CONVERGE — a collaborative AI decision and resolution platform
+<div align="center">
+  <h1>CONVERGE</h1>
+  <p><strong>One human decision-maker. One AI teammate. Accountability always stays human.</strong></p>
+  <p>A shared decision-resolution workspace for turning disagreement into evidence-backed, human-approved outcomes.</p>
+  <p>
+    <a href="#the-three-workflows">Workflows</a> ·
+    <a href="#how-it-works">How it works</a> ·
+    <a href="#run-locally">Run locally</a> ·
+    <a href="#live-switch-and-ai-setup">Live integration</a> ·
+    <a href="#security-and-deployment-readiness">Security & deployment</a>
+  </p>
+</div>
 
-**Flip the Switch Hackathon 2026 — Main track: Best Business Workflow · Side track: Code with Wispr**
+---
 
-People bring conflicting proposals, evidence, opinions and interests. CONVERGE helps them investigate, compare, challenge, negotiate and resolve those differences through structured human–AI collaboration — in a shared Switch room, with a human approving every commitment.
+## What is CONVERGE?
 
-## 1. What problem does it solve?
-A supplier raises a price, a family disagrees on a recipe, a podcast guest disputes a claim. In each case the work happens in chat, the evidence is scattered, and the decision has no audit trail. CONVERGE turns that chat into a case: evidence → conflict → proposal → human approval → audited outcome.
+CONVERGE is a collaborative decision-resolution platform built around a simple idea: **an AI teammate should help people make better decisions, not make consequential decisions for them.**
 
-## 2. Who uses it?
-Three different buyers, one engine — and the README says so plainly. **HAGGLE is the business product:** an independent restaurant or café owner who buys from one to three suppliers and feels a price rise in their margin. **COURT and CORRECTION are proof the engine generalises:** families and food communities arguing about the "real" version of a dish, and independent podcasters or small editorial teams who publish claims and cannot afford a fact-checking desk. None of the three would install a portal; all of them already live in chat.
+People already discuss supplier changes, family disagreements, and editorial corrections in chat. But the evidence gets scattered, assumptions go unchallenged, and the final decision is often difficult to verify later.
 
-## 3. Why it matters
-A few points of food margin are profit or loss for a small restaurant. A family recipe decided by the loudest voice loses the real version. A wrong claim published without a guest correction loses trust. Each needs a decision people can understand, verify and approve.
+CONVERGE gives that work a shared structure. A human and an AI teammate investigate the issue, examine evidence, make disagreements explicit, compare proposals, and record the outcome. The facilitator can participate in a real Mattermost conversation through Switch, while the CONVERGE application provides the calculations, case workspace, approval flow, and audit history.
 
-## 4. What makes it different?
-**Most collaboration tools help people communicate. CONVERGE helps them reach an accountable decision.**
+**The AI contributes analysis, calculations, questions, and proposals. A human retains authority over approvals and final decisions.**
 
-One shared decision engine, six stages, in every workflow: **Intake → Evidence → Conflict → Proposal → Human approval → Audited resolution.** Not any single feature — invoice→dish-margin, negotiation agents, recipe versioning and podcast fact-checking all exist somewhere (see `docs/competitor-validation.md`; Sofra and Happi Happi could not be found and are NOT cited, and Cupi's product is unverified — do not cite it). The difference is the assembly: the engine reused across three workflows, **in a Switch room in Mattermost**, with **deterministic maths** (an LLM never invents a financial number) and a **human approval gate enforced at the engine level** (an agent approving returns 400; tests prove it).
+> Most collaboration tools help people communicate. CONVERGE helps them reach an accountable decision.
 
-The novelty claim is phrased carefully: **our research did not identify a single product combining any of the three complete workflows** — not "no such product exists anywhere". COURT's mechanism (version conflict → blind coded test → gated tally → canonical recipe with dissent preserved) is the strongest differentiator; no adjudication product was found for it in checked sources. The full honest evaluation — what is novel, what is common, what a competitor could copy, and why someone would return — is in `docs/positioning.md`.
+## The three workflows
 
-## 5. The three workflows
-One engine, three applications. **HAGGLE is the flagship business product** (main track); **COURT is proof the engine handles a very different kind of disagreement**; **CORRECTION is a supporting application.** The same six stages run in the same order in every workflow, with the same approval and audit pattern.
-- **HAGGLE (flagship, Business)** — supplier price shock. Deterministic engine: old/new cost per serving, % change, food-cost %, gross margin, monthly/annual impact, max sustainable price at target food-cost %. Strategies priced from the same maths. Negotiation in a Switch room within the owner's mandate (target $0.16, max $0.20, walk away above it). Demo: DairyCo cream $0.16 → $0.24/fl oz, Alfredo +$0.48/serving, +$76.80/month, counter $0.18 for 6 weeks saves $57.60/month vs $0.24.
-- **COURT (Personal/Creative)** — competing recipe versions. Conflict table, standardised blind test-cook with coded samples, independent ratings (taste/texture/aroma/appearance/difficulty/overall), disagreement analysis, human-approved canonical recipe with the dissenting version preserved. A family panel is a deliberation tool, not a statistically valid study — stated in the app.
-- **CORRECTION (Personal/Creative)** — guest challenges a claim. Transcript → rule-based claim extraction (factual assertions separated from opinions) → evidence → guest correction in a shared room → Verification Agent evaluates → host approves → corrected show notes / errata, original preserved. Claim statuses: Verified / Corrected / Clarified / Disputed / Unresolved.
+CONVERGE uses one decision engine across three applications. **HAGGLE is the flagship business workflow.** COURT and CORRECTION demonstrate how the same decision process can support other kinds of disagreement.
 
-## 6. How does SWITCH participate?
-Switch is central — without it there is no shared room, no multi-party work, no approval in chat. Each case has a Mattermost room (`#haggle-dairyco`, `#recipe-ragu`, `#episode-osei`) with humans + agents, room Instructions bounding each agent, and roles (owner, supplier, negotiator, analyst, facilitator, verifier). Agents: Facilitator, Researcher, Analyst (deterministic tools only for money/maths), Challenger/Auditor, and workflow specialists via role instructions. One agent hands work to another with a message — there is no separate task protocol.
+| Workflow | Who it serves | What it does |
+|---|---|---|
+| **HAGGLE** · Business | Independent restaurant and café owners | Analyses supplier price changes, calculates dish-level impact, compares negotiation strategies, and prepares terms for human approval. |
+| **COURT** · Personal / creative | Families, cooking groups, and food communities | Compares competing recipe versions through coded blind ratings, makes disagreement visible, and records a human-selected canonical version while preserving dissent. |
+| **CORRECTION** · Editorial | Independent podcasters and small editorial teams | Organises transcript claims, connects them to supplied evidence, records guest challenges, and supports a human-approved correction record. |
 
-**Protocol (verified LIVE 2026-11-06 against the real switch-core 0.31.0 server, Console 0.40.1):** the live connection is the WebSocket at `/agents/{id}/connection/ws`; the app server's `switch-client.js` uses the SSE compatibility path (`GET /agents/{id}/events?connection_id=<uuid>`, `Accept: text/event-stream`, client-generated connection id) with a `POST /agents/{id}/connection/beat` tick every 2s (TTL 6s — an unbeaten stream is evicted with `heartbeat_lapsed`), while the agent runtime (`server/agent-runtime.js`, added 2026-11-07) holds the long-lived WebSocket connection with cursor, dedup, gap catch-up and reconnect — verified against the actual 0.31.0 server, see `docs/AGENT-RUNTIME.md`. **The runtime process is now running in production with a live
-model** (Cloudflare Workers AI, `@cf/qwen/qwen3-30b-a3b-fp8`,
-`mock: false`; restarted 2026-11-07 ~12:05 Dhaka after the eleventh
-VM replacement, PID 9897). It drafts with the live model and posts
-validated replies. **The facilitator can be addressed by any human participant in the case rooms** — the runtime routes any addressed human message (there is no sender allowlist); it ignores other agents and its own messages. **Conversational replies (added 2026-11-07, `server/replies.js`):** after a draft is built, the runtime may publish a VALIDATED informational model response into the originating room under its own agent identity — the facilitator as a real teammate, not just a draft inbox. Validation rejects approval/commitment/decision language, credential requests, supplier contact, and any money/% figure not matching the deterministic engine; replies are labelled informational, carry the engine figures, and are recorded idempotently (one reply per source message, `data/replies.json`). The runtime never holds a human session token and never calls a mutating app endpoint — approvals stay human-only. Verified live with a GENUINE model response 2026-11-07 ~12:15
-Dhaka: a real human question in `#haggle-dairyco` produced a
-live-model draft (`4a8bbe65…`, `mock: false`) and a validated reply
-in the real room 1 second later (event `sw_92703c30…`, ref
-`4a8bbe65`, live drawer 28 messages). (An earlier verification,
-2026-11-07 ~11:40, used the labelled mock provider — event
-`sw_e4e5c560…`, live drawer 23 messages — and proved the mechanism;
-the mock reply is clearly labelled MOCK and is NOT a live model
-response.) Ops are per-agent: `GET /agents/{id}/ops` + `POST /agents/{id}/ops/{name}`, arguments object as the body. `post_message` needs `connect_to_room` first on the same connection id (`X-Switch-Connection-Id`). Room messages are NOT pushed on the stream — the agent reads human messages from the room timeline via the `read_context` op (verified: the owner's approval was in the HAG-014 timeline on the first stack; after the VM replacements the stack was rebuilt and the rooms recreated, and the approval is preserved in CONVERGE's audit trail with a record note in the fresh room — the third-rebuild rooms then survived the fourth and fifth replacements intact; see `docs/switch-live-integration.md`). `GET /health` is public. See `docs/switch-live-integration.md` and `docs/switch-protocol-notes.md` (live-corrections banner).
+### HAGGLE — supplier negotiation
 
-**Switch status in this build: LIVE — real switch-core 0.31.0 + Mattermost 11.9.0 on this machine, rebuilt 2026-11-06 ~15:00–15:30 Dhaka (third rebuild, durable Postgres) and recovered eight times since from the durable data directory (fourth VM replacement ~16:29, fifth ~18:28–18:31, sixth ~20:33, seventh 2026-11-07 ~00:16, eighth 2026-11-07 ~02:27, ninth + tenth 2026-11-07 ~06:38–11:00, eleventh 2026-11-07 ~11:53–12:05) — no rebuild was needed any of those times.** Verified live on the recovered stack (see `docs/switch-live-integration.md` and `submission/evidence/switch-recovery-20261106/`): `GET /health` → 200 `{"status":"ok"}`, all `/health/ready` checks healthy (7/7); agent `converge-facilitator` re-registered (`POST /agents` → 200, id `4b6d039c-c2db-45df-8e10-a10769ad2cfa`); 53 live ops read from `GET /agents/{id}/ops`; Mattermost bridge active (default, id `c004c85d-c9a4-4e7b-8c39-13902311e21b`); three real rooms in team `switch` — `#haggle-dairyco` (`177e6354-e07f-44eb-b385-8055faf021e6`), `#recipe-ragu` (`478f26a8-a843-480e-9707-78c142000341`), `#episode-osei` (`04da8311-821b-4912-846b-93685e60b59d`) — with two-way delivery verified live (a human marker posted in Mattermost reached the agent via `read_context`, and an agent reply posted via the Switch API appeared in the Mattermost channel). The HAGGLE approval ran end to end in the real room on the first stack (agent analysis → owner approval in Mattermost → bridge delivery to the agent → human approval recorded in CONVERGE → confirmation back in the room); after the VM replacements the rooms were recreated with the same names and the approval preserved as a record note in the fresh room, and the third-rebuild rooms survived the fourth, fifth, sixth, seventh and eighth replacements intact (see `docs/switch-live-integration.md`). The earlier stacks' room timelines were lost to the replacements and are unrecoverable — the fresh rooms carry an honest record note, not a restored timeline. The production app's `switchRoomId` pointers are the third-rebuild room ids (approved 2026-11-06) and a live delivery test was posted through the production app into `#haggle-dairyco`, verified 2026-11-07 ~00:25 Dhaka (HAG-014 COMPLETED, P2, live drawer `live: true`, 15 messages). The draft handoff (§30) was verified live 2026-11-07 ~02:40 Dhaka: a real human request in `#haggle-dairyco` produced a mock-labelled draft in the inbox, a human reviewed and shared it, and the shared draft appeared in the real room (live drawer 19 messages). The conversational reply (agent-as-teammate, `server/replies.js`) was verified live 2026-11-07 ~11:40 Dhaka with the labelled mock provider: a real human question in `#haggle-dairyco` produced a mock reply in the real room 1 second later (event `sw_e4e5c560…`, live drawer 23 messages), and a re-route of the same message was skipped (0 posts). It was then verified live with a GENUINE model response 2026-11-07 ~12:15 Dhaka (Cloudflare Workers AI, Qwen3): a real human question produced a live-model draft (`4a8bbe65…`, `mock: false`) and a validated reply in the real room 1 second later (event `sw_92703c30…`, live drawer 28 messages).
+A supplier price increase can quietly erode a restaurant's margin. HAGGLE turns the price change into a decision the owner can evaluate.
 
-| Switch question | Status (2026-11-06) |
-| --- | --- |
-| Protocol verified | Yes — against the live server (Console 0.40.1 / core 0.31.0, WebSocket is the live connection; this client uses the SSE compatibility path with a 2s heartbeat, per-agent ops, `POST /agents`, `GET /health`). Corrections recorded in `docs/switch-live-integration.md`. |
-| Deployment | Live on this machine. The container runtime cannot start containers here (runc setns is denied by the sandbox), so the published images' code runs natively as host processes with the Compose env — same software, same versions, same ports. Postgres runs from a durable data directory that survives VM replacements; recovery from it is proven four times (2026-11-06–07). Full record in `docs/switch-live-integration.md`. |
-| Demo today | REAL-SWITCH — rebuilt 2026-11-06 ~15:00–15:30 and recovered eight times since from the durable Postgres data (fourth replacement ~16:29, fifth ~18:28–18:31, sixth ~20:33, seventh 2026-11-07 ~00:16, eighth 2026-11-07 ~02:27, ninth + tenth 2026-11-07 ~06:38–11:00, eleventh 2026-11-07 ~11:53–12:05); verified live 2026-11-07 ~12:15 (two-way delivery, draft handoff end to end, conversational reply end to end with a GENUINE live-model reply, live drawer 28 messages, HAG-014 COMPLETED/P2; see `submission/evidence/switch-recovery-20261106/`). The app's `/api/status` reports `REAL-SWITCH` with the live health probe; `/api/switch/*` talks to the real server. |
-| Simulated stub | Still shipped as the fallback when `SWITCH_BASE_URL` is unset, and still labelled SIMULATED everywhere it appears. It is never presented as real Switch. |
+- Enter supplier prices, ingredient usage per serving, menu price, sales volume, and the owner's target.
+- Calculate cost per serving, food-cost percentage, gross margin, monthly and annual impact, and the maximum sustainable supplier price.
+- Compare negotiation strategies using the same deterministic financial engine.
+- Submit a specific proposal for approval. The owner approves or rejects it; the AI cannot approve it.
 
-To point the app at the real server, set `SWITCH_BASE_URL`, `SWITCH_API_KEY`, `SWITCH_AGENT_ID` (and `SWITCH_BRIDGE_ID`, optional) — see `.env.example`.
+**Illustrative demo scenario:** heavy cream rises from $0.16 to $0.24 per fl oz. At six fl oz per Alfredo serving, the increase adds $0.48 per serving and $76.80 per month at 160 servings. A $0.18 counter-proposal would leave food cost at 29.38% and save $57.60 per month compared with $0.24. At a 30% food-cost target, the maximum sustainable price is approximately $0.1967 per fl oz.
 
-**What is real and what is simulated:** the integration is real (live switch-core 0.31.0 + Mattermost 11.9.0, real rooms, a real bridge, and a real owner approval posted in Mattermost that moved HAG-014 to COMPLETED). The *business participants* are simulated and labelled: DairyCo, the family members, and the guest are fictional demo data, and the supplier counter is a demo proposal — the supplier is not real, and the demo never claims it is. The SIMULATED-STUB fallback is a fallback, not the product: without the room there is no shared decision, only a single-user calculator. See `docs/positioning.md` §4 for the full statement.
+These are fictional demonstration inputs, not a real supplier quote or a claim that a supplier accepted the proposal. Actual outputs are calculated from the case inputs.
 
-## 7. Which agents exist?
-Facilitator (coordinates, tracks progress, blocks premature completion), Researcher (collects evidence, records uncertainty), Analyst (deterministic calculations only), Challenger/Auditor (challenges unsupported conclusions, checks assumptions), Workflow Specialist (negotiation / adjudication / correction instructions per room).
+### COURT — recipe deliberation
 
-## 8. What do humans approve?
-Supplier commitments, prices and contract terms, final recipe selection, editorial decisions, publication, and any irreversible operation. Agents recommend, calculate, investigate and prepare. They never execute an unauthorised commitment — the state machine enforces it (`AWAITING_APPROVAL` → `APPROVED` requires a human actor and a pending approval; tests prove an agent cannot approve).
+COURT helps a group compare versions of the same recipe without letting the loudest opinion automatically win.
 
-## 9. How to install and reproduce the demo
-```
-node --version   # >= 22
-npm install      # installs Playwright (development dependency, browser tests only)
-npx playwright install chromium   # one-time browser download for the browser tests
-npm test         # 378 pass, 0 fail, 1 skipped (379 total; engine + server persistence + Switch-client + COURT blindness + escaping + HAGGLE creation + remediation + NEW-1 deep links + GAP-2 Submit for approval + portability + UX polish + whole-app visual polish + P0 server core + agent runtime/LLM/tools/WebSocket + dark redesign + §30 draft handoff + §31 hash chain / stable claim ids / security / axe + conversational replies + live-model shape fixes)
-npm run check    # node --check on all server files
-PORT=3100 npm start   # http://localhost:3100 (port 3000 is the Switch gateway)
-```
-No runtime npm dependencies and no database server: data is a JSON file in `data/converge.json`, seeded with fictional demo cases. Playwright is a **development dependency only** — it runs the browser tests (`tests/gap2-journey.test.js`, `tests/new1-deeplink.test.js`, `tests/staleness-refresh.test.js`); the app itself (`npm start`) does not need it. Open HAG-014, see the analysis and strategies, post in the room (live Switch room when configured; labelled SIMULATED stub otherwise), approve the $0.18 counter as Owner, and watch the audit trail. Then open CRT-007 (conflict table) and COR-003 (claims).
+- Compare ingredient and method differences in a conflict table.
+- Rate coded samples without revealing the sample-to-recipe mapping before the tally is complete.
+- Review reader-level scores, aggregate results, and disagreement.
+- Let a human adopt the canonical version while preserving the alternatives and recorded dissent.
 
-**Two ways to run the app — kept separate:**
-- **SIMULATED-STUB (default, no Switch server):** just `npm start`. The room is a labelled stub transcript, not Switch. This is the mode for trying the app and running the demo.
-- **REAL-SWITCH (live Switch + Mattermost):** run the Switch stack first (see `submission/setup-guide.md` — Docker Compose on a Docker-capable machine, or the native run in `docs/switch-live-integration.md`), then start the app with `SWITCH_BASE_URL`, `SWITCH_API_KEY`, `SWITCH_AGENT_ID` and `SWITCH_BRIDGE_ID` set. Verify `/api/status` → `switchMode: REAL-SWITCH`.
+The seeded demonstration contains three recipe versions, three demo readers, and nine ratings. The panel illustrates a deliberation process; it is **not a statistically representative study**.
 
-## 10. Limitations
-- **No real users yet.** The demo data is fictional and there are no usability sessions or independent evaluation. That is the biggest remaining gap, and it is stated here rather than hidden. See `docs/positioning.md` §5–6.
-- **Demo video:** recorded 2026-11-06 on the first Switch stack; it shows the real app, real rooms, and the real HAG-014 approval, but it has five stale elements — a "Pending" line on the completed HAG-014 overview (recorded before a fix; the live app no longer shows it), the first-stack room timelines (lost to the VM replacement), the counter figure shown ($0.19 — the engine now derives it from the case input, $0.18 for the seed case, P0 2026-11-07), the old light UI (the live app is now the dark redesign), and it predates the Submit for approval flow (GAP-2) — the live app now has it, the video does not show it. **A re-record is deferred until the release gate is met — the gate is now MET except for the real-teammate requirement** (real model provider configured, genuine agent response verified 2026-11-07 ~12:15, agent responses in the actual room, two-way conversation works, HAGGLE + COURT verified, human approval protected, tests pass — see `docs/JUDGE-SCORECARD.md` §4). What remains: Rubai must invite at least one real teammate (only the `user` account exists on this Mattermost). The reworked script (`submission/demo-script.md`) is now chat-first: Mattermost dominates, with the facilitator's actual identity, human teammates, genuine messages and agent replies; the CONVERGE dashboard appears only for calculations, evidence, proposals and approvals. The mock reply is clearly labelled MOCK and must never be presented as live AI. Disclosed in `submission/demo-script.md` (Recording notes); the original recording is retained, not re-recorded or edited.
-- The Switch integration is live (see §6); the labelled stub remains only as the fallback when `SWITCH_BASE_URL` is unset. The real-server deployment path is the native run documented in `docs/switch-live-integration.md` (the container runtime cannot start containers on this VM — runc setns is denied — so the published images' code runs as host processes; the headless Compose stack in `docs/switch-deployment.md` is the reference it was derived from, and the laptop run sheet in `docs/switch-protocol-notes.md` §4 is superseded).
-- Demo supplier/guest are simulated and labelled; no agreement is real unless a real supplier accepted it. The HAGGLE approval in the demo was the owner's own approval in the real room, recorded by the app — the supplier counter itself is still demo data.
-- COURT panel is deliberation, not statistics. CORRECTION claim extraction is rule-based, not a verified fact-checker; citations must be supplied as evidence, never fabricated.
-- UI is the dark charcoal/cyan/lime operations workspace (approved redesign 2026-11-07; Direction B structure kept — Inter + IBM Plex Mono, bullet graph, dense tables, two-step approval — reskinned, not rebuilt) — see `docs/ui-directions.md` for the original directions and `tests/dark-redesign.test.js` for the contrast evidence (every text/background pair ≥ 4.5:1 WCAG AA). The demo video predates the redesign and shows the old light UI; see below. Screenshots live in `submission/screenshots/` (see its README): the four premium shots are the submission assets, but **the PNG files are not in this GitHub repository yet** — the available GitHub integration is text-only and rejects binary uploads. Do not treat a screenshot reference as a GitHub-hosted image until that upload succeeds.
+### CORRECTION — evidence-led editorial review
 
-## Submission
-- Track: Best Business Workflow ($2,000) + Code with Wispr ($500, side track)
-- Deadline: Nov 7 2026, 11:59 PM IST / Nov 8, 12:29 AM Bangladesh time
-- Wispr: see `docs/wispr-log.md` — voice log only; the genuine Insights scorecard screenshot is supplied by Rubai at submission time and is never fabricated.
+CORRECTION supports a transparent process when a guest challenges a statement in a transcript.
+
+- Extract candidate factual claims from a transcript using rule-based logic.
+- Separate factual assertions from opinions.
+- Link claims to evidence supplied with the case.
+- Record a guest challenge and an assessment for human review.
+- Preserve the original claim while a human decides whether it is Verified, Corrected, Clarified, Disputed, or Unresolved.
+
+CORRECTION is not an independent fact-checking service. Claim extraction is rule-based, evidence must be supplied, and a human remains responsible for editorial decisions.
+
+## How it works
+
+All three workflows use the same six-stage lifecycle:
+
+~~~mermaid
+flowchart LR
+    A["1. Intake"] --> B["2. Evidence"]
+    B --> C["3. Conflict"]
+    C --> D["4. Proposal"]
+    D --> E["5. Human approval"]
+    E --> F["6. Audited resolution"]
+~~~
+
+1. **Intake** — create a case with the people, inputs, and decision that need attention.
+2. **Evidence** — gather the relevant figures, versions, transcript material, and supplied sources.
+3. **Conflict** — make differences, assumptions, and uncertainty explicit.
+4. **Proposal** — calculate or draft options that can be evaluated.
+5. **Human approval** — the responsible person decides. The agent cannot approve, adopt, or make a commitment.
+6. **Audited resolution** — record the selected outcome and the history behind it.
+
+## The AI teammate and the trust boundary
+
+The facilitator is one registered Switch agent. Its facilitator, financial-analyst, researcher, challenger, and workflow-specialist roles are **internal reasoning lenses**, not separate independently authenticated agent accounts.
+
+The runtime can read case context, use the restricted read/draft tool registry, create a reviewable draft, and post a validated informational reply under its own agent identity. It cannot use the human session, approve a proposal, adopt a recipe, change a claim status, or execute a supplier commitment.
+
+The core safeguards are deliberate:
+
+- **Deterministic financial calculations.** The engine computes all monetary and percentage figures. The language model drafts explanations around those values; it does not invent the numbers.
+- **Structured model output.** Provider responses are checked against the expected schema before they are used.
+- **Validated room replies.** Informational replies are checked for approval or commitment language, credential requests, supplier-contact instructions, and figures that do not match the engine context. Replies are idempotently associated with their source message.
+- **Human-only decisions.** Mutating application endpoints require a session. Approval is bound to a specific proposal version and content hash; an agent has no approval tool.
+- **Audit history.** State changes are recorded with actor information. The SHA-256 audit chain provides tamper evidence, not tamper-proof storage: an operator with write access could recompute the chain, and an independently anchored checkpoint is not yet implemented.
+
+## Architecture
+
+The application and the long-running agent runtime are separate Node.js processes. Switch provides the shared room and agent connection; Mattermost is the human-facing chat surface.
+
+~~~mermaid
+flowchart TB
+    H["People"] <--> MM["Mattermost rooms"]
+    MM <--> SW["Switch Core and Mattermost bridge"]
+    SW <--> AR["CONVERGE agent runtime"]
+    AR <--> LLM["Configured LLM provider"]
+    AR --> VAL["Reply validation"]
+    VAL --> SW
+    AR <--> TOOLS["Read / draft tool registry"]
+    TOOLS --> ENG["Deterministic decision engine"]
+
+    B["Browser"] <--> APP["CONVERGE web app and Node.js API"]
+    APP <--> ENG
+    APP <--> SW
+    APP <--> DATA[("Case data and audit history")]
+    AR <--> AUX[("Draft and reply records")]
+~~~
+
+### Main components
+
+| Component | Responsibility |
+|---|---|
+| **app/** | Browser interface: case workspace, workflow views, evidence, decisions, activity, and the Switch room drawer. |
+| **server/server.js** | Node.js HTTP server, API routes, session handling, static app delivery, and Switch client integration. |
+| **server/engine.js** | Deterministic HAGGLE calculations, workflow transitions, COURT tally, CORRECTION claim handling, and audit events. |
+| **server/store.js** | Case persistence in the local JSON data store, with atomic writes and rotating backups. |
+| **server/agent-runtime.js** | Persistent Switch connection, addressed-message routing, context gathering, drafting, and validated conversational replies. |
+| **server/llm.js** | Provider adapter and structured-output validation for mock, OpenAI, and OpenAI-compatible providers. |
+| **server/tools.js** | Restricted agent tool registry. The model receives read/draft capabilities, not approval or execution tools. |
+| **server/drafts.js / server/replies.js** | Human-reviewable draft records and idempotent validated-reply records. |
+| **tests/** | Unit, integration, security, accessibility, and browser-journey tests. |
+
+## Technology
+
+- **Runtime:** Node.js 22 or newer, ECMAScript modules.
+- **Web application:** HTML, CSS, and browser JavaScript.
+- **Server:** Node.js built-in HTTP and filesystem APIs. The app has no production npm runtime dependencies.
+- **Collaboration:** Switch Core and its Mattermost bridge, with Mattermost as the chat interface.
+- **AI:** provider-independent adapter for OpenAI and OpenAI-compatible chat-completion APIs. Cloudflare Workers AI can be configured through its OpenAI-compatible endpoint.
+- **Persistence:** JSON files for the CONVERGE app's case, draft, and reply records. The Switch deployment has its own database and storage requirements.
+- **Testing:** Node's built-in test runner, Playwright, and axe-core.
+
+## Run locally
+
+### Requirements
+
+- Node.js **22+**
+- npm
+- Git
+
+### Install and start the app
+
+~~~bash
+git clone https://github.com/Rubai106/accordweave.git
+cd accordweave
+npm ci
+
+# Start the web app
+npm start
+~~~
+
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000).
+
+The app binds to loopback by default. If port 3000 is already in use, set another port before starting it.
+
+**PowerShell (Windows):**
+
+~~~powershell
+$env:PORT = "3100"
+npm start
+~~~
+
+**Bash (Linux / macOS):**
+
+~~~bash
+PORT=3100 npm start
+~~~
+
+### Run checks and tests
+
+Playwright's Chromium browser is needed for the browser tests. Install it once:
+
+~~~bash
+npx playwright install chromium
+~~~
+
+Then run:
+
+~~~bash
+npm run check
+npm test
+~~~
+
+The test suite uses isolated temporary case data. It does not need a live Switch server for the standard test run. The live Switch integration test is opt-in and runs only when its connection and credentials are configured.
+
+### Default mode: labelled simulation
+
+With SWITCH_BASE_URL unset, the app runs in **SIMULATED-STUB** mode. The room transcript is a labelled local simulation, not a real Mattermost room. This mode is useful for exploring the interface and running the app without a Switch deployment.
+
+A missing LLM configuration is also explicit: the agent runtime does not produce live-model drafts or replies without a configured provider. The mock provider is for tests and explicit local development only; mock output must never be described as live AI output.
+
+## Live Switch and AI setup
+
+A real collaboration deployment needs three running pieces:
+
+1. **Switch Core and Mattermost** — the Switch API, bridge, and Mattermost server must be running and healthy.
+2. **CONVERGE web app** — the app must be configured with a real Switch Core API URL and agent credentials.
+3. **CONVERGE agent runtime** — start this separately so it can maintain the long-lived connection, listen for addressed human messages, and respond in the correct rooms.
+
+### Configure the web app
+
+Set these environment variables in the process environment or your service manager. Do not put credentials in source control.
+
+| Variable | Required | Meaning |
+|---|---:|---|
+| **PORT** | No | HTTP port for the CONVERGE app. Defaults to **3000**. |
+| **SWITCH_BASE_URL** | For live Switch | **Switch Core API base URL**, not the Mattermost web URL and not the Gateway UI URL. |
+| **SWITCH_AGENT_ID** | For live Switch | Registered facilitator agent ID. |
+| **SWITCH_API_KEY** | For live Switch | Facilitator agent API key. Treat it as a secret. |
+| **SWITCH_BRIDGE_ID** | No | Mattermost bridge ID. If omitted, the app attempts to use the default bridge. |
+| **CONVERGE_DATA_FILE** | No | Path to the case JSON file. Defaults to data/converge.json. |
+
+The app uses the real Switch path only when SWITCH_BASE_URL, SWITCH_AGENT_ID, and SWITCH_API_KEY are all present. Verify the result at GET /api/status; it should report REAL-SWITCH and a healthy Switch probe.
+
+### Start the agent runtime
+
+Run the runtime in a **separate terminal or managed process**:
+
+~~~bash
+node server/agent-runtime.js
+~~~
+
+The runtime uses the Switch credentials from SWITCH_AGENT_ID and SWITCH_API_KEY, or from a protected credentials file supplied through CONVERGE_AGENT_CREDENTIALS_FILE.
+
+Set CONVERGE_ROOMS to a comma-separated list of the **actual room IDs in your Switch deployment**. Do not rely on the source-code defaults when setting up a new Switch installation; those IDs belong to a particular demo environment.
+
+The runtime and web app must point to the same case-data file. The runtime reads the case store without mutating it; draft and reply records are written alongside it.
+
+### Configure the language model
+
+| Variable | Meaning |
+|---|---|
+| **CONVERGE_LLM_PROVIDER** | openai, openai-compatible, or mock. |
+| **CONVERGE_LLM_API_KEY** | Provider API key. Never commit it or print it in logs. |
+| **CONVERGE_LLM_BASE_URL** | Base URL for an OpenAI-compatible API. Defaults to the OpenAI API base URL. |
+| **CONVERGE_LLM_MODEL** | Provider model identifier. |
+
+For Cloudflare Workers AI, use the provider's OpenAI-compatible endpoint with CONVERGE_LLM_PROVIDER=openai-compatible, and set the account-specific base URL, API token, and model identifier from your Cloudflare account.
+
+Conversational replies are enabled by default when a provider is configured. Set CONVERGE_REPLY_ENABLED=false to disable room replies while testing; drafts can still be generated for review. Enable replies only after confirming the provider, room mapping, and reply validation behaviour.
+
+For the complete runtime lifecycle and Switch protocol notes, see [Agent Runtime](docs/AGENT-RUNTIME.md), [Architecture](docs/ARCHITECTURE.md), and [Setup](docs/SETUP.md).
+
+## Data and persistence
+
+The CONVERGE app currently uses local JSON files:
+
+- **data/converge.json** — cases, proposals, approvals, messages, and audit events.
+- **data/drafts.json** — agent drafts for human review.
+- **data/replies.json** — validated conversational reply records.
+
+These files are gitignored and created at runtime. Case data is written atomically with rotating backups. Draft and reply files also use atomic writes.
+
+This design is suitable for a local or single-instance demonstration. It is **not a multi-instance database**: the app and runtime share files, and simultaneous read-modify-write operations can race. A production deployment needs durable shared persistence and appropriate concurrency control before scaling to multiple app or runtime instances.
+
+## Security and deployment readiness
+
+**The repository is not currently ready to be exposed as an unrestricted public service.** The local demo has deliberate constraints that must be addressed before a public cloud deployment:
+
+- The server binds to 127.0.0.1 and the current origin/CORS policy is restricted to local origins.
+- POST /api/session issues a single fixed demo identity (Mara · Owner). This is a demonstration session, not user authentication, multi-user identity, or role-based access control.
+- The app's JSON file store is single-instance storage, not a horizontally scalable production database.
+- Switch agent credentials and LLM API keys must be provided through a secure environment or secret manager and must never be committed.
+- Public deployment needs real user authentication and authorization, configurable trusted origins, durable shared persistence, backups, monitoring, and deployment-level access controls.
+
+The documented Switch setup is a self-hosted/local integration path. **A complete Cloudflare/VPS production deployment has not yet been implemented or validated in this repository.** Cloudflare Workers AI is a supported model-provider option; using it does not mean the CONVERGE application, Switch Core, or Mattermost are hosted on Cloudflare.
+
+For Switch deployment reference material, see [Submission Setup Guide](submission/setup-guide.md), [Switch Deployment Notes](docs/switch-deployment.md), and [Switch Live Integration Record](docs/switch-live-integration.md).
+
+## Demo data and evaluation boundaries
+
+The seeded scenarios are fictional demonstrations:
+
+- DairyCo and the supplier negotiation are fictional.
+- The COURT readers and ratings are seeded demonstration data, not evidence of a user study.
+- The CORRECTION transcript and supplied evidence are demo material, not independent verification of a real guest's claims.
+
+The app's safeguards and workflows can be tested, but the seed data should not be presented as real customer outcomes, independent validation, or measured product impact.
+
+## Repository guide
+
+~~~text
+accordweave/
+├── app/                 # Browser application
+├── server/              # API, decision engine, Switch client, AI runtime
+├── tests/               # Automated tests
+├── docs/                # Architecture, setup, security, and research notes
+├── submission/          # Demo scripts, setup notes, and submission material
+├── .env.example         # Variable names and empty example values
+├── package.json
+└── README.md
+~~~
+
+## Further documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — components, boundaries, and message flow.
+- [Setup guide](docs/SETUP.md) — local setup and environment variables.
+- [Agent runtime](docs/AGENT-RUNTIME.md) — persistent connection, message routing, and recovery.
+- [Security](docs/SECURITY.md) — approval boundary, audit model, and limitations.
+- [Positioning and differentiation](docs/positioning.md) — target users, value proposition, and honest competitive framing.
+- [Judge scorecard](docs/JUDGE-SCORECARD.md) — evidence-based evaluation against the hackathon criteria.
+- [Demo script](submission/demo-script.md) — the planned HAGGLE and COURT walkthrough.
+- [Switch live integration notes](docs/switch-live-integration.md) — live protocol and local deployment record.
+
+---
+
+<div align="center">
+  <strong>CONVERGE</strong><br>
+  One human decision-maker. One AI teammate. Better-informed decisions, with accountability always human.
+</div>
