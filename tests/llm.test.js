@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveLlmConfig, validateJson, assertValidJson, extractJson,
+  normalizeStructuredOutput,
   createMockProvider, createOpenAiProvider, createProvider,
   LlmNotConfiguredError, LlmOutputError,
 } from '../server/llm.js';
@@ -102,6 +103,64 @@ test('extractJson: plain JSON, fenced JSON, and no-JSON rejection', () => {
   assert.deepEqual(extractJson('{"a":1}'), { a: 1 });
   assert.deepEqual(extractJson('Here is the result:\n```json\n{"a":2}\n```'), { a: 2 });
   assert.throws(() => extractJson('just some prose, no json at all'), LlmOutputError);
+});
+
+// Live-model shape fix (2026-11-07): Qwen3 on Cloudflare Workers AI
+// returned caveats as a single string, not an array, and the draft was
+// rejected. Normalisation wraps the string verbatim; anything else
+// still fails validation.
+test('normalizeStructuredOutput: string caveats wraps to an array, content preserved', () => {
+  const out = normalizeStructuredOutput({ draft: 'x', role: 'facilitator', caveats: 'single caveat', needsHumanReview: true });
+  assert.deepEqual(out.caveats, ['single caveat']);
+  assert.equal(out.draft, 'x');
+  // An array is left alone; a non-object passes through untouched.
+  assert.deepEqual(normalizeStructuredOutput({ caveats: ['a', 'b'] }).caveats, ['a', 'b']);
+  assert.equal(normalizeStructuredOutput(null), null);
+  assert.equal(normalizeStructuredOutput('text'), 'text');
+});
+
+test('createOpenAiProvider: string caveats is normalised and passes validation (stubbed fetch)', async () => {
+  const stubFetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: '{"draft":"hello","role":"facilitator","confidence":"medium","caveats":"one caveat","needsHumanReview":true}' } }] }),
+  });
+  const p = createOpenAiProvider({ apiKey: 'sk-secret', baseUrl: 'https://example.invalid/v1', model: 'test-model', fetchImpl: stubFetch });
+  const schema = {
+    type: 'object',
+    required: ['draft', 'role', 'confidence', 'caveats', 'needsHumanReview'],
+    properties: {
+      draft: { type: 'string', minLength: 1 },
+      role: { type: 'string', enum: ['facilitator', 'researcher'] },
+      confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+      caveats: { type: 'array', items: { type: 'string' } },
+      needsHumanReview: { type: 'boolean' },
+    },
+    additionalProperties: false,
+  };
+  const result = await p.complete({ messages: [{ role: 'user', content: 'hi' }], schema });
+  assert.deepEqual(result.data.caveats, ['one caveat']);
+  assert.equal(result.mock, false);
+});
+
+test('createOpenAiProvider: a non-string, non-array caveats still fails validation', async () => {
+  const stubFetch = async () => ({
+    ok: true,
+    json: async () => ({ choices: [{ message: { content: '{"draft":"hello","role":"facilitator","confidence":"medium","caveats":42,"needsHumanReview":true}' } }] }),
+  });
+  const p = createOpenAiProvider({ apiKey: 'sk-secret', baseUrl: 'https://example.invalid/v1', model: 'test-model', fetchImpl: stubFetch });
+  const schema = {
+    type: 'object',
+    required: ['draft', 'role', 'confidence', 'caveats', 'needsHumanReview'],
+    properties: {
+      draft: { type: 'string', minLength: 1 },
+      role: { type: 'string', enum: ['facilitator', 'researcher'] },
+      confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+      caveats: { type: 'array', items: { type: 'string' } },
+      needsHumanReview: { type: 'boolean' },
+    },
+    additionalProperties: false,
+  };
+  await assert.rejects(() => p.complete({ messages: [{ role: 'user', content: 'hi' }], schema }), LlmOutputError);
 });
 
 test('createOpenAiProvider: happy path returns validated data (stubbed fetch)', async () => {

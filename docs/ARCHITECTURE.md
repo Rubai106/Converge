@@ -1,7 +1,7 @@
 # CONVERGE — Architecture
 
-**Status:** current as of the conversational-reply window, 2026-11-07 ~12:00 Dhaka. Suite
-**375 pass, 0 fail, 1 skipped (376 total)**, `npm run check` clean. This document describes the system as
+**Status:** current as of the live-model verification, 2026-11-07 ~12:15 Dhaka. Suite
+**378 pass, 0 fail, 1 skipped (379 total)**, `npm run check` clean. This document describes the system as
 it now stands — after the Phase Zero audit (`docs/COMPREHENSIVE-AUDIT.md`),
 the P0/P1 implementation (commits `eb479aa`, `5bcb9c2`, `390bae4`,
 `3e18a86`), the §30 draft handoff (`3894630`), the §31 security work
@@ -332,12 +332,35 @@ Full protocol evidence is in `docs/AGENT-RUNTIME.md` and
 - **Mock provider** (`CONVERGE_LLM_PROVIDER=mock`) exists for tests
   and local dev only. Every mock response carries `mock: true`, and
   the runtime logs that mock drafts are test output, never live AI.
+- **Live provider: Cloudflare Workers AI (configured and verified
+  2026-11-07 ~12:15).** Provider `openai-compatible`, model
+  `@cf/qwen/qwen3-30b-a3b-fp8`, base URL
+  `https://api.cloudflare.com/client/v4/accounts/18103063db0eb43221413a0e9561a711/ai/v1`
+  (the Account ID is not secret). The API key lives ONLY in
+  `~/workspace/switch-server/.converge-llm.env` (mode 600, outside
+  the repo) — never in the repo, the frontend, logs, or memory.
+  **Known limitation:** the Cloudflare vault link
+  (`custom.cloudflare`) stores the token for Muse's own API calls,
+  but it cannot inject the key into the standalone Node runtime's
+  environment — the runtime reads it from the private env file.
+- **Model-shape normalisation (`normalizeStructuredOutput`,
+  `server/llm.js`).** Live Qwen3 returned `caveats` as a single
+  string instead of an array, which rejected the first live draft.
+  `normalizeStructuredOutput` wraps a string `caveats` into
+  `[string]` (shape-only, content preserved verbatim); anything else
+  still fails validation. Qwen3 also returned the role as "CONVERGE
+  facilitator" and confidence as a number (0.7) instead of the exact
+  enum values — fixed by spelling the exact allowed values into the
+  system prompt in `server/agent-runtime.js`. Both fixes are covered
+  by 3 new tests in `tests/llm.test.js` (now 19).
 - **No-model state is first-class, not an error.** If no provider key
   is configured, the runtime starts, connects, observes rooms, and
-  logs — but produces **no drafts** and fabricates nothing. As of this
-  writing **no provider key is configured** (see
-  `docs/IMPLEMENTATION-LOG.md`); the live model path is unconfigured
-  and the runtime reports it at startup.
+  logs — but produces **no drafts** and fabricates nothing. A
+  provider key IS now configured (Cloudflare Workers AI — see
+  above); the runtime reports the live model at startup
+  (`mock: false`). The no-model state remains first-class: if the
+  key is removed, the runtime observes and logs but produces no
+  drafts.
 - **Tool registry — six tools, two permissions, zero mutate
   permissions:**
 
@@ -392,13 +415,14 @@ record (both append-only, gitignored, neither the case store).
 SIGINT/SIGTERM stop it cleanly.
 
 **Deployment status (honest):** the runtime process **is running in
-production** (observe-only: `LIVE MODEL NOT CONFIGURED`, `mock: false`;
-restarted 2026-11-07 ~11:00 Dhaka after the tenth VM replacement).
-It observes the three rooms and logs, but produces no drafts and
-posts no replies until a provider key is configured. The reply
-mechanism was verified live with the labelled mock provider
-(2026-11-07 ~11:40 Dhaka — see §11.1). The app server :3100 runs the
-new code; the runtime is a separate process.
+production with a live model** (Cloudflare Workers AI,
+`@cf/qwen/qwen3-30b-a3b-fp8`, `mock: false`; restarted 2026-11-07
+~12:05 Dhaka after the eleventh VM replacement, PID 9897, replies
+enabled). It routes addressed human messages, drafts with the live
+model, and posts validated replies. The reply mechanism was verified
+live with the genuine model (2026-11-07 ~12:15 Dhaka — see §11.1).
+The app server :3100 runs the new code; the runtime is a separate
+process.
 
 ### 11.1 Conversational replies — the facilitator as a teammate (`server/replies.js`)
 
@@ -455,8 +479,35 @@ the question; live drawer 23 messages). The reply is clearly labelled
 MOCK and carries the correct engine figures (28.63% → 31.62%,
 +$76.80/mo, +$921.60/yr, max sustainable $0.1967). A re-route of the
 same source message was skipped (0 posts). This proves the mechanism;
-it does NOT prove a live model response — no provider key is
-configured yet (Cloudflare Workers AI token outstanding from Rubai).
+it does NOT prove a live model response — no provider key was
+configured yet at that time (Cloudflare Workers AI token outstanding
+from Rubai).
+
+**Verified live (genuine model — 2026-11-07 ~12:15 Dhaka):** a real
+human question in `#haggle-dairyco` ("What is the financial impact
+of the DairyCo price rise, and which counter should we offer? Do not
+approve anything.") produced a genuine live-model draft (id
+`4a8bbe65…`, `mock: false`, provider `openai-compatible`, role
+financial-analyst, confidence medium, status GENERATED,
+needsHumanReview true, tools read_case / read_room_timeline /
+compute_haggle) and a validated reply in the real room 1 second
+later (event `sw_92703c30…`, ref `4a8bbe65`, `mock: false`, status
+POSTED, live drawer 28 messages). The reply used only correct engine
+figures ($0.48, $0.96 → $1.44, $4.58 → $5.06, 28.63% → 31.62%,
+$76.80/mo, $921.60/yr, $0.1967); it correctly states the approved
+counteroffer ($0.19/fl oz for 6 weeks, approved by the owner) as a
+past human decision and contains no approval/commitment language
+("The owner must review and decide on the final terms"). The model
+cannot approve: HAG-014 is still COMPLETED, approval P2 intact,
+audit events still 10, all three audit chains valid,
+`data/converge.json` hash unchanged (`71a83bcf…`). Logs do not
+expose the token (0 matches for the token pattern across the
+runtime/app/switch-core/mattermost logs). The Drafts tab now shows 4
+drafts for HAG-014: the new LIVE one (`4a8bbe65`, `mock: false`)
+plus 3 old MOCK ones (clearly labelled `mock: true`). Two real
+model-shape bugs were found and fixed live to make this work (see
+§10): the exact-enum system-prompt fix and
+`normalizeStructuredOutput()`.
 
 ## 12. The three workflows, one engine
 
@@ -510,7 +561,9 @@ CORRECTION is the supporting application.
   deferred).
 - No per-user auth. One demo identity (`Mara · Owner`), one session
   token per boot, loopback-only. See `docs/SECURITY.md`.
-- No live model call. The LLM abstraction and the mock provider are
-  built and tested; the live path needs a provider key.
+- The live model call is now configured and verified (Cloudflare
+  Workers AI, Qwen3 — see §10 and §11.1). The mock provider remains
+  for tests and local dev only, and is clearly labelled `mock: true`
+  everywhere it appears.
 - No separate agent identities. The specialist roles are prompt
   lenses inside the one facilitator runtime.

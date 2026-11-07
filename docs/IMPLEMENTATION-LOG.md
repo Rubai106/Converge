@@ -782,3 +782,124 @@ release gate. Work done in this window:
 - Production app :3100 still running the new code (HTTP 200).
   Runtime observe-only (PID 18570). Data hash `71a83bcfa7d680f2`
   (explained above); audit chains valid for all three cases.
+
+## ~12:05–12:20 Dhaka — eleventh VM replacement recovery + live-model verification (Cloudflare Workers AI)
+
+### Eleventh VM replacement recovery — done (restart, not rebuild)
+
+The VM was replaced an eleventh time (~11:53 UTC; uptime 10 minutes,
+every process down, all ports down) just as Rubai sent the Cloudflare
+token. Recovery ran on his go-ahead ("Run the recovery", 12:05 Dhaka),
+per `RECOVERY.md` §2 — a restart, not a rebuild. Backup first
+(`~/workspace/backups/switch-recovery-20261107-1205`; converge.json
+inode 1302596 vs backup 1304292, SHA-256 `71a83bcf…` matches on both).
+Postgres up (switch + mattermost DBs present), Mattermost :8065 → 200,
+switch-core `/health` ok + `/health/ready` 7/7, nginx :3000 → 200, app
+:3100 → 200. Bridge `c004c85d-…` active/default and all rooms verified
+preserved via the Switch API (same ids). Two-way delivery verified
+(human marker → `read_context`; agent marker → Mattermost). Production
+data hash unchanged (`71a83bcf…`); HAG-014 COMPLETED, approval P2
+intact; audit chains valid for all three cases.
+
+### Cloudflare Workers AI — configured and verified live
+
+Rubai provided his Cloudflare Account ID in chat
+(`18103063db0eb43221413a0e9561a711` — not secret) and the API token
+for the runtime. Configuration is in the backend runtime environment
+only: `~/workspace/switch-server/.converge-llm.env` (mode 600,
+outside the repo) — provider `openai-compatible`, model
+`@cf/qwen/qwen3-30b-a3b-fp8`, base URL
+`https://api.cloudflare.com/client/v4/accounts/18103063db0eb43221413a0e9561a711/ai/v1`.
+The token is in that file only — never in the repo, the frontend,
+logs, memory, or any doc. **Known limitation (also in
+`docs/ARCHITECTURE.md` §10):** the Cloudflare vault link
+(`custom.cloudflare`) stores the token for Muse's own API calls, but
+it cannot inject the key into the standalone Node runtime's
+environment — the runtime reads it from the private env file. The
+token value passed through chat in Rubai's message; he was told it is
+only in that file and can rotate it in the Cloudflare dashboard if he
+prefers it not to have passed through chat.
+
+### Two real model-shape bugs found and fixed live
+
+Qwen3's structured output did not match the draft schema on the first
+live calls:
+
+1. **Wrong enum values.** The model returned role "CONVERGE
+   facilitator" and confidence 0.7 (a number) instead of the exact
+   enum values (`facilitator`, `medium`). Fix: the system prompt in
+   `server/agent-runtime.js` now spells out the exact allowed values
+   — the role field must be EXACTLY the role lens (`"${role}"`), the
+   confidence field EXACTLY one of `low`/`medium`/`high` (a word, not
+   a number). A direct re-test with the strengthened prompt returned
+   role `facilitator`, confidence `medium`, all figures correct.
+   (Llama 3.1 8B instant was also tried and rejected the request —
+   HTTP 400 on the `response_format` + `json_schema` body — so Qwen3
+   stays the model.)
+2. **String `caveats`.** The model returned `caveats` as a single
+   string instead of an array, which rejected the first live draft.
+   Fix: `normalizeStructuredOutput()` in `server/llm.js` (shape-only:
+   wraps a string `caveats` into `[string]`, content preserved
+   verbatim; anything else still fails validation), plus a prompt
+   line. Both fixes are covered by 3 new tests in
+   `tests/llm.test.js` (now 19).
+
+The first `llm.js` test call timed out at 30s (a cold-start /
+long-reasoning first call); direct calls afterwards answered in
+~1–5s, so no timeout change was made.
+
+### Live end-to-end verification — genuine model response, 5 checks
+
+A real human question was posted in `#haggle-dairyco` ("What is the
+financial impact of the DairyCo price rise, and which counter should
+we offer? Do not approve anything."). The runtime (PID 9897, live
+model, `mock: false`, replies enabled) produced:
+
+- **Draft** `4a8bbe65-c4b4-45ec-b0ff-3a16bc398d4d` — `mock: false`,
+  provider `openai-compatible`, role financial-analyst, confidence
+  medium, status GENERATED, needsHumanReview true, toolsUsed
+  read_case / read_room_timeline / compute_haggle.
+- **Reply** in the real room 1 second later — event
+  `sw_92703c3079cd495993d854491dbd6c57`, ref `4a8bbe65`, `mock: false`,
+  status POSTED. Live drawer now 28 messages.
+
+The five checks, all verified:
+
+1. **Real model response** — draft `mock: false`, provider
+   `openai-compatible`, model `@cf/qwen/qwen3-30b-a3b-fp8`. Not a mock.
+2. **Passes reply validation** — the reply text used ONLY correct
+   engine figures ($0.48, $0.96 → $1.44, $4.58 → $5.06, 28.63% →
+   31.62%, $76.80/mo, $921.60/yr, $0.1967); it correctly states the
+   approved counteroffer ($0.19/fl oz for 6 weeks, approved by the
+   owner) as a past human decision; it contains no
+   approval/commitment language ("The owner must review and decide
+   on the final terms").
+3. **In the correct room under the facilitator's identity** — the
+   reply is in `#haggle-dairyco` under `converge-facilitator`,
+   event `sw_92703c30…`.
+4. **The model cannot approve** — HAG-014 is still COMPLETED,
+   approval P2 "$0.19/fl oz for 6 weeks" intact (approvedBy Owner,
+   2026-11-05), audit events still 10, all three audit chains VALID,
+   `data/converge.json` hash UNCHANGED (`71a83bcfa7d680f2…`). The
+   draft is GENERATED, not approved.
+5. **Logs do not expose the token** — 0 matches for the token
+   pattern in the agent-runtime / app / switch-core / mattermost
+   logs; 0 files contain the full token value.
+
+The Drafts tab now shows 4 drafts for HAG-014: the new LIVE one
+(`4a8bbe65`, `mock: false`) plus 3 old MOCK ones (clearly labelled
+`mock: true`) — the mock fallback is clearly labelled and
+distinguished. The demo video is NOT recorded — the release gate is
+now met except for the real-teammate requirement (Rubai must still
+invite at least one real teammate; only the `user` account exists on
+this Mattermost).
+
+### Score change — ~40/50 → ~41/50
+
+`docs/JUDGE-SCORECARD.md` updated: Use of Switch **8 → 9** (the
+live-model reply in the room is now demonstrated); Technical stays 10
+(379 tests — 378 pass, 1 skipped — plus the two live model-shape
+fixes); Creativity stays 7 (no real users); Presentation stays 7
+(video still stale with SIX elements). **Total 33/40 ≈ 41/50.**
+The path to 45/50 is now: real users (+2) + re-recorded video (+2).
+The live-model step is done — it is no longer on the moves list.

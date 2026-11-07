@@ -322,6 +322,9 @@ export function createAgentRuntime(opts = {}) {
       '- You NEVER approve, adopt, publish, or change a claim status. If asked to, say a human must decide and stop there.',
       '- Every draft is labelled draft-only and needs human review. State your uncertainty plainly.',
       `- Your role lens for this message: ${ROLE_LENSES[role]}`,
+      `- The role field in your JSON must be EXACTLY "${role}" (the role lens above). Do not write a different label.`,
+      '- The confidence field must be EXACTLY one of: low, medium, high (a word, not a number). Use "medium" unless you are certain.',
+      '- The caveats field must be an ARRAY of strings, e.g. ["first caveat", "second caveat"], never a single string.',
       '- Reply as JSON matching the schema: {draft, role, confidence, caveats, needsHumanReview:true}.',
     ].join('\n');
     const user = JSON.stringify({

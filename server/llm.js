@@ -130,6 +130,20 @@ export function assertValidJson(value, schema) {
   return value;
 }
 
+// Normalise the shape mismatches real models produce for the draft
+// schema, BEFORE validation. This is shape-only: the model's words are
+// preserved verbatim, only wrapped into the expected container.
+//   - caveats as a single string -> [that string]. Qwen3 (Cloudflare
+//     Workers AI, 2026-11-07 live) returned a string here and the draft
+//     was rejected; wrapping keeps the caveat and lets the validator
+//     check each item is a string. Anything else still fails validation.
+export function normalizeStructuredOutput(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed;
+  const out = { ...parsed };
+  if (typeof out.caveats === 'string') out.caveats = [out.caveats];
+  return out;
+}
+
 // Extract the first JSON object/array from model text. Models sometimes
 // wrap JSON in fences or prose; the validator still decides. Throws
 // LlmOutputError when nothing parseable is found.
@@ -169,7 +183,7 @@ function makeCompleter({ name, isMock, transport }) {
         throw new LlmOutputError('complete() requires a non-empty messages array');
       }
       const raw = await transport(messages, timeoutMs);
-      const parsed = extractJson(raw);
+      const parsed = normalizeStructuredOutput(extractJson(raw));
       assertValidJson(parsed, schema);
       return { data: parsed, raw, provider: name, mock: Boolean(isMock) };
     },
